@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from engine.pipeline import _apply_asset_pairing, analyze_directory
 from engine.store import PhotoStore
+from PIL import Image
 
 
 def _run(full_dir, db, **kw):
@@ -91,3 +92,54 @@ def test_asset_pairing_metadata_is_persistable(tmp_path):
     assert meta[0]["asset_pair_id"] == meta[1]["asset_pair_id"]
     assert {meta[0]["asset_role"], meta[1]["asset_role"]} == {"raw", "jpeg"}
     assert meta[0]["preview_path"] == str(jpeg)
+
+
+def test_read_exif_returns_inspector_fields_and_preserves_missing(tmp_path):
+    from engine.loader import read_exif
+
+    tagged = tmp_path / "tagged.jpg"
+    exif = Image.Exif()
+    exif[272] = "Lumina Camera"
+    exif[42036] = "Prime 50mm"
+    exif[37386] = (50, 1)
+    exif[33434] = (1, 125)
+    exif[33437] = (28, 10)
+    exif[34855] = 400
+    Image.new("RGB", (20, 10)).save(tagged, exif=exif)
+
+    result = read_exif(str(tagged))
+
+    assert result["camera_model"] == "Lumina Camera"
+    assert result["lens_model"] == "Prime 50mm"
+    assert result["focal_length"] == 50.0
+    assert result["shutter_speed"] == "1/125"
+    assert result["aperture"] == 2.8
+    assert result["iso"] == 400
+
+    plain = tmp_path / "plain.jpg"
+    Image.new("RGB", (5, 5)).save(plain)
+    missing = read_exif(str(plain))
+    assert all(
+        missing[key] is None
+        for key in (
+            "camera_model",
+            "lens_model",
+            "focal_length",
+            "shutter_speed",
+            "aperture",
+            "iso",
+        )
+    )
+
+
+def test_pipeline_persists_backend_models_and_analysis_time(full_data_dir, tmp_db_path):
+    _run(full_data_dir, tmp_db_path)
+
+    with PhotoStore(tmp_db_path) as photo_store:
+        rows = photo_store.all_photos(order_by="path")
+
+    assert rows
+    assert {row["analysis_backend"] for row in rows} == {"heuristic"}
+    assert {row["quality_model"] for row in rows} == {"opencv-technical-v1"}
+    assert {row["scene_model"] for row in rows} == {"opencv-heuristic"}
+    assert all(row["analysis_ms"] is not None and row["analysis_ms"] >= 0 for row in rows)

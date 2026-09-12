@@ -127,7 +127,18 @@ def read_exif(path: str) -> dict:
         height    高
         has_exif  是否读到真实 EXIF 时间
     """
-    info = {"ts": None, "width": 0, "height": 0, "has_exif": False}
+    info = {
+        "ts": None,
+        "width": 0,
+        "height": 0,
+        "has_exif": False,
+        "camera_model": None,
+        "lens_model": None,
+        "focal_length": None,
+        "shutter_speed": None,
+        "aperture": None,
+        "iso": None,
+    }
     try:
         with Image.open(path) as im:
             info["width"], info["height"] = im.size
@@ -141,6 +152,13 @@ def read_exif(path: str) -> dict:
                 if ts is not None:
                     info["ts"] = ts
                     info["has_exif"] = True
+                info["camera_model"] = _clean_exif_text(exif.get(272))
+                info["lens_model"] = _clean_exif_text(exif.get(42036))
+                info["focal_length"] = _exif_number(exif.get(37386))
+                info["shutter_speed"] = _format_shutter(exif.get(33434))
+                info["aperture"] = _exif_number(exif.get(33437))
+                iso = _exif_number(exif.get(34855))
+                info["iso"] = int(round(iso)) if iso is not None else None
     except Exception:
         pass
     if info["ts"] is None:
@@ -149,6 +167,34 @@ def read_exif(path: str) -> dict:
         except Exception:
             info["ts"] = 0.0
     return info
+
+
+def _clean_exif_text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _exif_number(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, tuple) and len(value) == 2:
+            return float(value[0]) / float(value[1])
+        return float(value)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _format_shutter(value) -> str | None:
+    seconds = _exif_number(value)
+    if seconds is None or seconds <= 0:
+        return None
+    if seconds < 1:
+        denominator = max(1, round(1.0 / seconds))
+        return f"1/{denominator}"
+    return f"{seconds:g}s"
 
 
 # ---------------------------------------------------------------------------

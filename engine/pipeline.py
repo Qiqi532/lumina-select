@@ -111,6 +111,7 @@ def _stage1_worker(path: str) -> dict:
 
     返回 dict：ok / rgb / pil / q(质量指标) / phash。
     """
+    started_at = time.perf_counter()
     try:
         pil = loader.load_image(path, max_size=ANALYZE_SIZE)
         if pil is None:
@@ -118,7 +119,8 @@ def _stage1_worker(path: str) -> dict:
         rgb = np.asarray(pil, dtype=np.uint8)
         q = quality.analyze_image_array(rgb)
         ph = similarity.phash_of_image(pil) or ""
-        return {"ok": True, "path": path, "rgb": rgb, "pil": pil, "q": q, "phash": ph}
+        return {"ok": True, "path": path, "rgb": rgb, "pil": pil, "q": q, "phash": ph,
+                "analysis_ms": (time.perf_counter() - started_at) * 1000.0}
     except Exception as e:
         _log.warning("阶段一处理失败 %s: %s", path, e)
         return {"ok": False, "path": path}
@@ -127,10 +129,17 @@ def _stage1_worker(path: str) -> dict:
 def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict]):
     """批量写入阶段一结果（单事务；断点续跑的最小落库单元）。"""
     rows = []
+    backend_name = inference.get_backend().name
+    quality_model = inference.quality_model_name()
     for m, s1 in zip(metas, results):
         base = {"path": m["path"], "fname": m["fname"], "ts": m["ts"], "mtime": m["mtime"],
                 "width": m["width"], "height": m["height"],
-                "asset_pair_id": m.get("asset_pair_id"), "asset_role": m.get("asset_role")}
+                "asset_pair_id": m.get("asset_pair_id"), "asset_role": m.get("asset_role"),
+                "camera_model": m.get("camera_model"), "lens_model": m.get("lens_model"),
+                "focal_length": m.get("focal_length"), "shutter_speed": m.get("shutter_speed"),
+                "aperture": m.get("aperture"), "iso": m.get("iso"),
+                "analysis_backend": backend_name, "quality_model": quality_model,
+                "analysis_ms": s1.get("analysis_ms")}
         if not s1.get("ok"):
             # 解码失败的照片也记录 mtime，避免每次重试（仍是 NULL 指标，重算可覆盖）
             rows.append(base)
@@ -142,6 +151,9 @@ def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict
                      "eye_close_prob": s1["eye_close_prob"], "phash": s1["phash"]})
     if rows:
         store.upsert_photos_batch(rows)
+    for m, result in zip(metas, results):
+        if result.get("ok"):
+            store.replace_face_regions(m["path"], result.get("regions", []))
 
 
 def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
@@ -183,13 +195,14 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
                 results.append({"ok": False})
                 continue
             face = {"is_face": False, "ear": None, "eyes_closed": False,
-                    "eye_close_prob": None}
+                    "eye_close_prob": None, "regions": []}
             if use_faces and _faces is not None:
                 try:
                     fr = _faces.detect_face_and_eyes(r["rgb"], r["pil"])
                     face = {"is_face": fr["is_face"], "ear": fr["ear"],
                             "eyes_closed": fr["eyes_closed"],
-                            "eye_close_prob": fr["eye_close_prob"]}
+                            "eye_close_prob": fr["eye_close_prob"],
+                            "regions": fr.get("regions", [])}
                 except Exception as e:
                     _log.warning("人脸检测异常 %s: %s", r["path"], e)
             results.append({
@@ -200,6 +213,8 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
                 "is_face": face["is_face"], "ear": face["ear"],
                 "eyes_closed": face["eyes_closed"],
                 "eye_close_prob": face["eye_close_prob"],
+                "regions": face["regions"],
+                "analysis_ms": r.get("analysis_ms", 0.0),
                 "phash": r["phash"],
             })
 
@@ -316,7 +331,12 @@ def analyze_directory(root: str, db_path: str,
             ex = loader.read_exif(p)
             mt = loader.get_mtime(p)
             meta.append({"path": p, "fname": os.path.basename(p), "ts": ex["ts"],
-                         "mtime": mt, "width": ex["width"], "height": ex["height"]})
+                         "mtime": mt, "width": ex["width"], "height": ex["height"],
+                         "camera_model": ex.get("camera_model"),
+                         "lens_model": ex.get("lens_model"),
+                         "focal_length": ex.get("focal_length"),
+                         "shutter_speed": ex.get("shutter_speed"),
+                         "aperture": ex.get("aperture"), "iso": ex.get("iso")})
             old = old_map.get(p)
             mtime_ok = old and abs((old.get("mtime") or 0) - mt) < 1e-6
             stage1_ok = mtime_ok and old.get("blur_score") is not None and old.get("phash")
@@ -379,7 +399,8 @@ def analyze_directory(root: str, db_path: str,
                         rows.append({"path": meta[i]["path"],
                                      "aesthetic": r["aesthetic"],
                                      "scene": r["scene"],
-                                     "scene_conf": r["scene_conf"]})
+                                     "scene_conf": r["scene_conf"],
+                                     "scene_model": inference.aesthetic_model_name()})
                     # 【断点续跑】逐批回写美学/场景（批量事务）
                     store.upsert_photos_batch(rows)
                 if progress_cb:

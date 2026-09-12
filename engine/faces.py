@@ -39,6 +39,7 @@ import numpy as np
 
 from . import config
 from .log import get_logger
+from .quality_metrics import evaluate_technical_quality
 
 # ---------------------------------------------------------------------------
 # 常量（统一来自 engine/config.py，与界面/引擎口径一致）
@@ -320,7 +321,8 @@ def detect_face_and_eyes(rgb: np.ndarray, pil_img=None,
         error
     """
     result = {"is_face": False, "num_faces": 0, "ear": None,
-              "eye_close_prob": None, "eyes_closed": False, "error": None}
+              "eye_close_prob": None, "eyes_closed": False, "error": None,
+              "regions": []}
     if not _ensure_mediapipe():
         result["error"] = "mediapipe 不可用"
         return result
@@ -335,6 +337,9 @@ def detect_face_and_eyes(rgb: np.ndarray, pil_img=None,
     result["is_face"] = True
     result["num_faces"] = len(landmarks)
     ears = [_ear(pts) for pts in landmarks]
+    regions = [_face_region(rgb, index, points, ears[index])
+               for index, points in enumerate(landmarks)]
+    result["regions"] = regions
     result["ear"] = min(ears) if ears else None
     result["eyes_closed"] = (result["ear"] is not None and result["ear"] < ear_threshold)
     if result["eyes_closed"]:
@@ -353,9 +358,41 @@ def detect_face_and_eyes(rgb: np.ndarray, pil_img=None,
         _log.warning("闭眼分类器运行失败（按仅 EAR）：%s", e)
         close_prob = None
     result["eye_close_prob"] = close_prob
+    if ears:
+        regions[int(np.argmin(ears))]["eye_close_prob"] = close_prob
     if close_prob is not None and close_prob > model_conf:
         result["eyes_closed"] = True
     return result
+
+
+def _face_region(rgb: np.ndarray, face_index: int, landmarks, ear: float) -> dict:
+    xs = [min(1.0, max(0.0, float(point[0]))) for point in landmarks]
+    ys = [min(1.0, max(0.0, float(point[1]))) for point in landmarks]
+    left, right = min(xs), max(xs)
+    top, bottom = min(ys), max(ys)
+    pad_x = (right - left) * 0.08
+    pad_y = (bottom - top) * 0.08
+    left, right = max(0.0, left - pad_x), min(1.0, right + pad_x)
+    top, bottom = max(0.0, top - pad_y), min(1.0, bottom + pad_y)
+    height, width = rgb.shape[:2]
+    x1, x2 = int(left * width), max(int(np.ceil(right * width)), int(left * width) + 1)
+    y1, y2 = int(top * height), max(int(np.ceil(bottom * height)), int(top * height) + 1)
+    crop = rgb[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+    sharpness = (
+        evaluate_technical_quality(np.ascontiguousarray(crop)).sharpness
+        if crop.size
+        else 0.0
+    )
+    return {
+        "face_index": face_index,
+        "x": left,
+        "y": top,
+        "width": right - left,
+        "height": bottom - top,
+        "ear": ear,
+        "eye_close_prob": None,
+        "sharpness": sharpness,
+    }
 
 
 def eye_model_name() -> str:

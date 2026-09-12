@@ -94,3 +94,34 @@ def test_no_face_neutral():
     assert r["is_face"] is False
     assert r["eyes_closed"] is False
     assert r["eye_close_prob"] is None
+
+
+def test_all_face_regions_include_bbox_eye_state_and_local_sharpness(monkeypatch):
+    monkeypatch.setattr(faces, "_ensure_mediapipe", lambda: True)
+    first = [(0.10, 0.20), (0.30, 0.50)] + [(0.20, 0.35)] * 476
+    second = [(0.60, 0.10), (0.85, 0.45)] + [(0.72, 0.25)] * 476
+    monkeypatch.setattr(faces, "_detect_landmarks", lambda _rgb: [first, second])
+    monkeypatch.setattr(faces, "_ear", lambda points: 0.25 if points is first else 0.28)
+    calls = []
+    monkeypatch.setattr(
+        faces,
+        "eye_close_probability",
+        lambda _image, points: calls.append(points) or 0.8,
+    )
+    checker = (np.indices((64, 64)).sum(axis=0) % 2 * 255).astype(np.uint8)
+    rgb = np.repeat(checker[:, :, None], 3, axis=2)
+
+    result = faces.detect_face_and_eyes(rgb, pil_img=Image.fromarray(rgb))
+
+    assert calls == [first]
+    assert len(result["regions"]) == 2
+    for index, region in enumerate(result["regions"]):
+        assert region["face_index"] == index
+        assert 0.0 <= region["x"] <= 1.0
+        assert 0.0 <= region["y"] <= 1.0
+        assert 0.0 < region["width"] <= 1.0
+        assert 0.0 < region["height"] <= 1.0
+        assert 0.0 <= region["sharpness"] <= 100.0
+        assert "ear" in region and "eye_close_prob" in region
+    assert result["regions"][0]["eye_close_prob"] == 0.8
+    assert result["regions"][1]["eye_close_prob"] is None

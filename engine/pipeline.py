@@ -44,6 +44,7 @@ from . import config, loader, quality, similarity, scorer
 from . import inference
 from .log import get_logger
 from .store import PhotoStore
+from services.asset_pairing import pair_assets
 
 try:
     from . import faces as _faces
@@ -59,6 +60,28 @@ QUALITY_WORKERS = config.QUALITY_WORKERS  # 质量检测线程池并行数
 # 分块大小：内存与"取消响应速度"的共同旋钮。块越大 GPU 利用率越高，
 # 但内存占用与取消延迟同步上升。经验值 = 线程数 × 4。
 CHUNK = max(QUALITY_WORKERS * 4, 8)
+
+
+def _apply_asset_pairing(meta: list[dict]) -> None:
+    """Attach stable asset ids, roles, and preferred preview paths in place."""
+    by_path = {item["path"]: item for item in meta}
+    timestamps = {item["path"]: item.get("ts") for item in meta}
+    for asset in pair_assets(
+        by_path,
+        lambda path: timestamps.get(str(path)),
+    ):
+        for member, role in ((asset.raw_path, "raw"), (asset.jpeg_path, "jpeg")):
+            if member is None:
+                continue
+            item = by_path[str(member)]
+            item["asset_pair_id"] = asset.asset_id
+            item["asset_role"] = role
+            item["preview_path"] = str(asset.preview_path)
+
+
+def _same_asset(left: dict, right: dict) -> bool:
+    left_id = left.get("asset_pair_id")
+    return bool(left_id and left_id == right.get("asset_pair_id"))
 
 
 def _ai_model_signature() -> str:
@@ -106,7 +129,8 @@ def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict
     rows = []
     for m, s1 in zip(metas, results):
         base = {"path": m["path"], "fname": m["fname"], "ts": m["ts"], "mtime": m["mtime"],
-                "width": m["width"], "height": m["height"]}
+                "width": m["width"], "height": m["height"],
+                "asset_pair_id": m.get("asset_pair_id"), "asset_role": m.get("asset_role")}
         if not s1.get("ok"):
             # 解码失败的照片也记录 mtime，避免每次重试（仍是 NULL 指标，重算可覆盖）
             rows.append(base)
@@ -140,7 +164,7 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
 
         # --- a) 线程池解码 + 质量 + pHash（纯 CPU，GIL 可释放）---
         with ThreadPoolExecutor(max_workers=QUALITY_WORKERS) as ex:
-            raw = list(ex.map(_stage1_worker, [m["path"] for m in chunk_metas]))
+            raw = list(ex.map(_stage1_worker, [m.get("preview_path", m["path"]) for m in chunk_metas]))
 
         # --- b) 画质模型批量 GPU 推理（一次前向算完整个块）---
         valid_pos = [k for k, r in enumerate(raw) if r.get("ok")]
@@ -303,6 +327,17 @@ def analyze_directory(root: str, db_path: str,
                 need_clip.add(i)
             if progress_cb:
                 progress_cb("读取元数据", i + 1, n)
+        _apply_asset_pairing(meta)
+        store.upsert_photos_batch(
+            [
+                {
+                    "path": item["path"],
+                    "asset_pair_id": item.get("asset_pair_id"),
+                    "asset_role": item.get("asset_role"),
+                }
+                for item in meta
+            ]
+        )
         _phase_end("读取元数据")
 
         # ---- 3) 阶段一：质量/画质模型/人脸/phash（分块流式 + 线程池 + 批量 GPU）----
@@ -329,7 +364,10 @@ def analyze_directory(root: str, db_path: str,
                 batch_idx = order[b:b + CLIP_BATCH]
                 batch_imgs, valid = [], []
                 for i in batch_idx:
-                    im = loader.load_image(meta[i]["path"], max_size=CLIP_LOAD_SIZE)
+                    im = loader.load_review_preview(
+                        meta[i].get("preview_path", meta[i]["path"]),
+                        max_size=CLIP_LOAD_SIZE,
+                    )
                     if im is not None:
                         batch_imgs.append(im)
                         valid.append(i)
@@ -477,6 +515,8 @@ def analyze_directory(root: str, db_path: str,
                     if x["path"] == best_path:
                         continue
                     i = idx_of_path.get(x["path"])
+                    if i is not None and best_i is not None and _same_asset(meta[best_i], meta[i]):
+                        continue
                     h = hexes[i] if i is not None else ""
                     if best_hex and h and similarity.hamming_hex(best_hex, h) <= config.DUP_HAMMING_STRICT:
                         dup_paths.add(x["path"])
@@ -521,6 +561,8 @@ def analyze_directory(root: str, db_path: str,
                     "path": p, "fname": meta[i]["fname"], "ts": meta[i]["ts"],
                     "mtime": meta[i]["mtime"], "width": meta[i]["width"],
                     "height": meta[i]["height"],
+                    "asset_pair_id": meta[i].get("asset_pair_id"),
+                    "asset_role": meta[i].get("asset_role"),
                     "scene": s, "scene_conf": conf,
                     "blur_score": blur, "over_ratio": over, "under_ratio": under,
                     "aesthetic": aes,

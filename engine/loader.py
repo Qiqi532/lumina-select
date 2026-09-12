@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
+from io import BytesIO
 
 import cv2
 import numpy as np
@@ -174,6 +175,40 @@ def load_image(path: str, max_size: int | None = None) -> Image.Image | None:
             im.thumbnail((max_size, max_size), Image.LANCZOS)
         return im
     except (UnidentifiedImageError, OSError, Exception):
+        return None
+
+
+def load_review_preview(
+    path: str,
+    *,
+    paired_jpeg: str | None = None,
+    max_size: int | None = None,
+) -> Image.Image | None:
+    """Load a low-latency review preview, preferring paired/embedded JPEG data."""
+    if paired_jpeg:
+        return load_image(paired_jpeg, max_size=max_size)
+    if os.path.splitext(path)[1].casefold() not in RAW_EXTS or not _HAS_RAWPY:
+        return load_image(path, max_size=max_size)
+    try:
+        import rawpy
+
+        with rawpy.imread(path) as raw:
+            try:
+                thumb = raw.extract_thumb()
+                format_name = getattr(thumb.format, "name", str(thumb.format)).casefold()
+                if "jpeg" in format_name or "jpg" in format_name:
+                    image = Image.open(BytesIO(thumb.data))
+                    image = ImageOps.exif_transpose(image).convert("RGB")
+                else:
+                    raise ValueError("embedded preview is not JPEG")
+            except Exception:
+                image = Image.fromarray(
+                    raw.postprocess(use_camera_wb=True, half_size=True)
+                ).convert("RGB")
+        if max_size is not None:
+            image.thumbnail((max_size, max_size), Image.LANCZOS)
+        return image
+    except Exception:
         return None
 
 

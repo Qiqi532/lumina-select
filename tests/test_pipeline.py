@@ -2,7 +2,7 @@
 """pipeline.py 单测：增量分析、断点续跑、场景手动修正持久化（用小型图片，CPU）。"""
 from __future__ import annotations
 
-from engine.pipeline import analyze_directory
+from engine.pipeline import _apply_asset_pairing, analyze_directory
 from engine.store import PhotoStore
 
 
@@ -74,3 +74,20 @@ def test_phase_timing_present(full_data_dir, tmp_db_path):
                                       "相似聚类", "评分与甄选"}
     for v in r["phase_timing"].values():
         assert isinstance(v, float)
+
+
+def test_asset_pairing_metadata_is_persistable(tmp_path):
+    raw = tmp_path / "IMG_0001.CR3"
+    jpeg = tmp_path / "IMG_0001.JPG"
+    raw.touch()
+    jpeg.touch()
+    meta = [
+        {"path": str(raw), "ts": 1_000.0},
+        {"path": str(jpeg), "ts": 1_500.0},
+    ]
+
+    _apply_asset_pairing(meta)
+
+    assert meta[0]["asset_pair_id"] == meta[1]["asset_pair_id"]
+    assert {meta[0]["asset_role"], meta[1]["asset_role"]} == {"raw", "jpeg"}
+    assert meta[0]["preview_path"] == str(jpeg)

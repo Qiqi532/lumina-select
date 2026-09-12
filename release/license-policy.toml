@@ -1,0 +1,8 @@
+deny_packages = ["pyiqa"]
+deny_license_terms = [
+  "polyform noncommercial",
+  "cc-by-nc",
+  "non-commercial",
+  "research only",
+]
+manual_review_packages = ["PyQt6", "PyQt6-Qt6", "PyQt6-sip"]

@@ -3,7 +3,7 @@
 本地 AI 智能选片工具：**废片剔除 → 相似分组 → 场景自适应评分 → 最佳帧推荐 → 不确定甄选**，一键导出保留片。
 照片全程本地处理、不上传；GUI 为 **PyQt6 桌面原生窗口**（无浏览器、无参数面板），算法核心在 `engine/`（纯 Python，可独立命令行调试）。
 
-**双版本技术栈**：标准版使用 Python · PyTorch · OpenCLIP · MUSIQ/BRISQUE（pyiqa）；轻量版使用 OpenCV 启发式推理。两版共用 MediaPipe（人脸 / 闭眼）· pHash · SQLite（WAL）· PyQt6，并分别通过 PyInstaller / Inno Setup 独立打包。
+**双版本技术栈**：标准版使用 Torch/CLIP/ViT + OpenCV 技术质量评分；轻量版使用 OpenCV 启发式推理。两版共用 MediaPipe（人脸 / 闭眼）· pHash · SQLite（WAL）· PyQt6，并分别通过 PyInstaller / Inno Setup 独立打包。
 
 **关键指标**（RTX 4060 Laptop，1000 张实测）：全流程 63.9 s（验收 ≤5 min）；增量重分析 3.87 s；断点续跑、分块流式内存控制（5000+ 张不爆内存）；pytest 单测 + 端到端冒烟。
 
@@ -18,7 +18,7 @@
 | 自动废片剔除 | 模糊（拉普拉斯方差）、过曝/欠曝（直方图占比）、**闭眼**（MediaPipe EAR + ViT 分类器融合）、高度重复 |
 | 相似分组 | EXIF 时间戳连拍分组 + pHash 感知哈希（并查集合并，覆盖跨机位相似） |
 | 场景自适应 | CLIP 分类：人像/风光/建筑/街拍/宠物/静物/其他，不同场景用不同权重 |
-| 画质/美学评分 | 可插拔模型链：画质 MUSIQ→DBCNN→BRISQUE，美学 LAION 线性头→CLIP 提示词，统一 0-100 口径，按基准数据（Cohen's d）选型 |
+| 画质/美学评分 | 两版共享确定性的 OpenCV 清晰度/曝光/对比度技术评分；标准版使用 LAION 线性头→CLIP 提示词进行美学评分 |
 | 最佳帧推荐 | 组内综合评分（清晰/曝光/美学/人脸），Top1 自动 5 星 |
 | 不确定甄选 | 无明确胜者（分差小/帕累托冲突/场景置信低）时进入人工甄选（A/B/C/D 选择） |
 | 一键导出 | CSV 清单 + 复制保留文件到导出目录 |
@@ -39,7 +39,8 @@ engine/
   config.py            全项目可调参数唯一来源（阈值/权重/模型名/路径，界面与引擎同源）
   log.py               统一日志（控制台 + 文件 smart_cull.log）
   loader.py            目录扫描、JPEG/PNG/RAW 解码、EXIF、缩略图缓存
-  quality.py           模糊/曝光检测 + 无参考画质评估（MUSIQ 为主，DBCNN/BRISQUE 自动降级，pyiqa）
+  quality.py           模糊/曝光兼容接口（委托 OpenCV 技术质量评分）
+  quality_metrics.py   两版共享的 OpenCV 清晰度/曝光/对比度评分
   faces.py             MediaPipe 人脸 + 闭眼 EAR + ViT 分类器融合
   aesthetics.py        CLIP 美学评分（LAION-Aesthetics 线性头，GPU 优先）
   scene.py             CLIP 场景分类（人像/风光/其他；调试用，GUI 走 aesthetics 统一调用）
@@ -54,7 +55,7 @@ tests/                 pytest 单元测试 + 端到端冒烟
 
 ### 数据流
 ```
-扫描目录 → 逐张：质量/画质(无参考)/phash/人脸（流式+线程池，逐张落库）
+扫描目录 → 逐张：OpenCV 技术质量/phash/人脸（流式+线程池，逐张落库）
        → CLIP 批量：美学+场景（逐批回写）
        → 相似聚类 → 组内场景自适应评分 → 废片/最佳帧/不确定甄选 → 全量入库
 ```
@@ -100,7 +101,7 @@ set ZIP=1 & build_dist.bat
 ```
 - 产物：`dist\光影选片助手\` 文件夹（含 `光影选片助手.exe` + 全部依赖）。**整个文件夹拷贝到任意 Windows 机器双击即用**，无需 Python、无需 `.venv`。
 - 模型权重（CLIP / 闭眼 ViT / MediaPipe）**不打包**，首次运行经 HF 镜像自动下载到 exe 目录下的 `.hf_cache` / `.torch_cache`（由 `dist_runtime_hook.py` 重定向，不落 C 盘）。
-- 对应规格：`光影选片助手_dist.spec`（入口直接是 `app_qt.py`，显式保留 CLIP、ViT、MUSIQ、DBCNN、BRISQUE 与 FaceMesh 所需模块，不递归打包测试和无关模型族）。
+- 对应规格：`光影选片助手_dist.spec`（入口直接是 `app_qt.py`，显式保留 CLIP、ViT 与 FaceMesh 所需模块，不递归打包测试和无关模型族，且不包含 pyiqa）。
 - **2026-09-07 本机实测**：干净 CPU Torch 环境构建约 5 分钟，onedir 产物 910.0 MiB / 6608 个文件；Inno Setup 安装包 228.4 MiB。
 
 #### Torch 标准版：制作安装包（单文件 setup.exe，含卸载）
@@ -114,7 +115,7 @@ set ZIP=1 & build_dist.bat
 - 提示：模型会下载进安装目录，建议安装到有写入权限的位置；当前安装器使用用户级安装权限。
 
 ### GPU 与降级说明
-- 有 CUDA GPU：CLIP / 画质模型自动用 GPU，速度最快；
+- 有 CUDA GPU：CLIP / ViT 自动用 GPU，速度最快；OpenCV 技术质量评分保持 CPU 本地执行；
 - 无 GPU / 驱动异常：自动回退 CPU，功能不变、仅更慢；
 - 本次本机构建的标准安装包使用 `torch 2.14.0+cpu`；如需发布 CUDA 版，请先按 PyTorch 官方方式在干净 `.venv` 中安装匹配驱动的 CUDA Torch，再执行 `build_dist.bat`；
 - `engine/aesthetics.py` 未找到 LAION 美学头时自动降级为「CLIP 提示词打分」；
@@ -123,7 +124,7 @@ set ZIP=1 & build_dist.bat
 
 ### 🪶 轻量版（无 torch，推荐普通用户分发）
 
-标准版内嵌 torch / CLIP / MUSIQ，体积较大。**轻量版**把这些深度学习推理
+标准版内嵌 torch / CLIP / ViT，体积较大。**轻量版**把这些深度学习推理
 整体替换为纯 OpenCV 启发式（`engine/inference.py` 的 `HeuristicBackend`），画质/美学/场景
 用图像特征估算，无需下载任何模型权重、完全离线：
 
@@ -217,9 +218,10 @@ python -m pytest tests -m e2e
 
 ## 🔒 许可
 
-- 项目代码：**Apache-2.0**（见 `LICENSE`）
-- 第三方模型权重各有独立许可，逐项清单见 **`NOTICE.md`**（CLIP=MIT、LAION-Aesthetics 头=Apache-2.0、
-  MediaPipe=Apache-2.0、dima806 闭眼分类器=Apache-2.0、pyiqa=Apache-2.0）
+- 项目代码：**Apache-2.0**（见 `LICENSE`）。
+- pyiqa 已从正式运行依赖、标准 PyInstaller spec 和发行内容中移除。
+- PyQt6/Qt 正式二进制发行必须有真实、可审计的许可批准依据；没有批准时只能构建开发候选包。
+- 第三方包清单由 `scripts/check_release_licenses.py` 从精确锁和安装元数据生成；模型权重逐项说明见 `NOTICE.md`。
 
 ## 📄 更新日志
 见 `CHANGELOG.md`。

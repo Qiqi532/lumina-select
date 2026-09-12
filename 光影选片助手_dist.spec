@@ -47,10 +47,6 @@ hiddenimports = [
     'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets',
     'mediapipe', 'mediapipe.python.solutions.face_mesh',
     'absl.logging', 'PIL.Image', 'cv2', 'imagehash',
-    'pyiqa',
-    'pyiqa.archs.musiq_arch',
-    'pyiqa.archs.dbcnn_arch',
-    'pyiqa.archs.brisque_arch',
 ]
 
 a = Analysis(

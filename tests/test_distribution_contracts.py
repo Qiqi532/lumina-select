@@ -49,9 +49,7 @@ def test_standard_spec_collects_only_required_model_families():
     assert "collect_submodules" not in spec
     assert "transformers.models.clip.modeling_clip" in spec
     assert "transformers.models.vit.modeling_vit" in spec
-    assert "pyiqa.archs.musiq_arch" in spec
-    assert "pyiqa.archs.dbcnn_arch" in spec
-    assert "pyiqa.archs.brisque_arch" in spec
+    assert "pyiqa" not in spec.casefold()
     assert "modules/face_landmark/**" in spec
 
 
@@ -59,12 +57,38 @@ def test_pytest_config_is_cp936_readable():
     (ROOT / "pytest.ini").read_text(encoding="cp936")
 
 
-def test_light_requirements_pin_numpy_compatibility():
-    req = _text("requirements-lightweight.txt")
-    assert "numpy>=1.26,<2" in req
-    assert "opencv-contrib-python" in req
-    assert "mediapipe==0.10.21" in req
+def _locked_packages(name: str) -> dict[str, str]:
+    packages = {}
+    for raw_line in _text(name).splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", "--")):
+            continue
+        assert "==" in line, f"unlocked requirement in {name}: {line}"
+        package, version = line.split("==", 1)
+        assert version and not any(operator in version for operator in "<>~")
+        packages[package.casefold().replace("_", "-")] = version
+    return packages
 
 
-def test_standard_requirements_use_compatible_mediapipe():
-    assert "mediapipe==0.10.21" in _text("requirements.txt")
+def test_light_requirements_are_exact_and_exclude_standard_runtime():
+    packages = _locked_packages("requirements-lightweight.txt")
+    assert packages["mediapipe"] == "0.10.21"
+    assert "opencv-contrib-python" in packages
+    assert {"torch", "torchvision", "transformers", "pyiqa"}.isdisjoint(packages)
+
+
+def test_standard_requirements_are_exact_and_commercial_safe():
+    packages = _locked_packages("requirements.txt")
+    assert packages["mediapipe"] == "0.10.21"
+    assert {"torch", "torchvision", "transformers"} <= packages.keys()
+    assert "pyiqa" not in packages
+
+
+def test_requirement_inputs_separate_runtime_editions():
+    standard = _text("requirements/standard.in").casefold()
+    lightweight = _text("requirements/lightweight.in").casefold()
+    development = _text("requirements/dev.in").casefold()
+    assert "torch" in standard and "transformers" in standard
+    assert "torch" not in lightweight and "transformers" not in lightweight
+    assert "pyiqa" not in standard + lightweight + development
+    assert "pytest-qt" in development and "pip-tools" in development

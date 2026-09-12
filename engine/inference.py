@@ -2,7 +2,7 @@
 """
 inference.py —— 推理后端抽象层（轻量化 Phase 0 接缝）
 
-目的：把"需要 torch / transformers / pyiqa 的深度学习推理"从业务流水线里隔离出来，
+目的：把"需要 torch / transformers 的深度学习推理"从业务流水线里隔离出来，
 统一收敛到本模块。后续换轻量后端（ONNX Runtime / 纯 OpenCV 启发式）时，
 **只需新增一个 Backend 实现并把 config.INFERENCE_BACKEND 切过去**，
 pipeline.py 与 scorer.py 等业务代码完全不用动。
@@ -23,6 +23,8 @@ import numpy as np
 from PIL import Image
 
 from . import config
+from .quality_metrics import MODEL_NAME as TECHNICAL_MODEL_NAME
+from .quality_metrics import evaluate_technical_quality_batch
 
 
 @runtime_checkable
@@ -48,27 +50,21 @@ class InferenceBackend(Protocol):
 
 
 class TorchBackend:
-    """默认后端：复用既有 quality.py / aesthetics.py（torch + pyiqa + CLIP）。
-
-    行为与改造前完全一致——quality_scores 走 quality.iqa_score_batch，
-    scene_and_aesthetics 走 aesthetics.analyze_batch。
-    """
+    """标准后端：Torch CLIP/ViT + shared OpenCV technical quality."""
 
     name = "torch"
 
     def __init__(self):
         # 延迟 import：避免无 torch 环境 import 本模块即失败
-        from . import quality as _quality
         from .aesthetics import aesthetic_model_name, analyze_batch
 
-        self._quality = _quality
         self._analyze_batch = analyze_batch
         self._aesthetic_model_name = aesthetic_model_name
 
     def quality_scores(self, rgbs: list[np.ndarray]) -> list[float | None]:
         if not rgbs:
             return []
-        return self._quality.iqa_score_batch(rgbs)
+        return [result.overall for result in evaluate_technical_quality_batch(rgbs)]
 
     def scene_and_aesthetics(self, images: list[Image.Image]) -> list[dict]:
         if not images:
@@ -76,7 +72,7 @@ class TorchBackend:
         return self._analyze_batch(images)
 
     def quality_model_name(self) -> str:
-        return self._quality.quality_model_name()
+        return TECHNICAL_MODEL_NAME
 
     def aesthetic_model_name(self) -> str:
         return self._aesthetic_model_name()
@@ -105,7 +101,7 @@ class HeuristicBackend:
     def quality_scores(self, rgbs: list[np.ndarray]) -> list[float | None]:
         if not rgbs:
             return []
-        return [self._quality_score(rgb) for rgb in rgbs]
+        return [result.overall for result in evaluate_technical_quality_batch(rgbs)]
 
     def scene_and_aesthetics(self, images: list[Image.Image]) -> list[dict]:
         if not images:
@@ -121,7 +117,7 @@ class HeuristicBackend:
         return out
 
     def quality_model_name(self) -> str:
-        return "opencv-heuristic"
+        return TECHNICAL_MODEL_NAME
 
     def aesthetic_model_name(self) -> str:
         return "opencv-heuristic"
@@ -163,10 +159,7 @@ class HeuristicBackend:
                 "skin_ratio": skin_ratio, "edge_density": edge_density, "colorfulness": colorfulness}
 
     def _quality_score(self, rgb: np.ndarray) -> float:
-        f = self._features(rgb)
-        score = 100.0 * (0.50 * f["sharp"] + 0.20 * f["exp_q"]
-                         + 0.15 * f["contrast_q"] + 0.15 * f["noise_q"])
-        return max(0.0, min(100.0, score))
+        return evaluate_technical_quality_batch([rgb])[0].overall
 
     def _scene_and_aesthetic(self, rgb: np.ndarray) -> dict:
         f = self._features(rgb)

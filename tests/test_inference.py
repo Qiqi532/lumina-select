@@ -5,6 +5,7 @@
 因此运行快、且不需要联网或 GPU。
 """
 import importlib.util
+import sys
 
 import numpy as np
 import pytest
@@ -89,6 +90,24 @@ def test_heuristic_quality_distinguishes_sharp_from_flat():
     assert isinstance(sharp_score, float) and isinstance(flat_score, float)
     assert 0.0 <= sharp_score <= 100.0 and 0.0 <= flat_score <= 100.0
     assert sharp_score > flat_score
+
+
+def test_both_backends_share_opencv_technical_model_name():
+    assert inference.HeuristicBackend().quality_model_name() == "opencv-technical-v1"
+    torch_backend = object.__new__(inference.TorchBackend)
+    assert torch_backend.quality_model_name() == "opencv-technical-v1"
+
+
+def test_standard_technical_quality_does_not_import_pyiqa():
+    sys.modules.pop("pyiqa", None)
+    torch_backend = object.__new__(inference.TorchBackend)
+    image = np.full((32, 32, 3), 128, dtype=np.uint8)
+
+    scores = torch_backend.quality_scores([image])
+
+    assert len(scores) == 1
+    assert isinstance(scores[0], float)
+    assert "pyiqa" not in sys.modules
 
 
 def test_heuristic_scene_and_aesthetics_schema():

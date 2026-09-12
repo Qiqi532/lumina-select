@@ -63,19 +63,9 @@ BRISQUE_ANALYZE_SIZE = 512     # BRISQUE 输入尺寸
 BRISQUE_SATURATED = 80.0       # BRISQUE ≥80 高度怀疑非自然内容（插画/截图）→ 中性化保护
 BRISQUE_WASTE_THRESHOLD = 50.0 # BRISQUE > 50 视为严重失真（仅作评分参考，不作废片触发源）
 
-# --- 【模型升级 v0.4】无参考画质模型（可插拔 + 自动降级链）-------------------
-# 背景：BRISQUE（LIVE 数据集，2000 年代手工特征）在 KonIQ-10k 上 SRCC 仅 ~0.665，
-#       而 MUSIQ ~0.916、DBCNN ~0.88。本项目实测（data/demo，Cohen's d）：
-#         brisque 60ms d=-19.3（合成极端图上虚高，真实照片上泛化差）
-#         musiq   74ms d= 4.08 ｜ musiq-ava 44ms d=3.59
-#         clipiqa 93ms d= 6.46 ｜ dbcnn     39ms d=6.83
-#       结论：默认换 musiq（KonIQ 训练，真实照片失真感知），并按顺序自动降级。
-IQA_MODEL = "musiq"                       # 首选画质模型（pyiqa 名）
-IQA_FALLBACKS = ["dbcnn", "brisque"]      # 依次降级；全部失败则退化为纯拉普拉斯
-
 # --- 【轻量化 Phase 0/1】推理后端选择（见 engine/inference.py）-------------------
-# 把"需要 torch/transformers/pyiqa 的深度学习推理"从流水线里隔离出来。
-#   "torch"      ：默认后端，沿用 quality.py(MUSIQ) / aesthetics.py(LAION 头+CLIP)，精度最高
+# 把"需要 torch/transformers 的深度学习推理"从流水线里隔离出来。
+#   "torch"      ：默认后端，CLIP/ViT + OpenCV 技术质量评分，精度最高
 #   "heuristic"  ：轻量后端，纯 OpenCV + numpy 启发式，**无 torch / 无模型下载 / 完全离线**，
 #                  用于"轻量桌面版"分发（exe 去掉 torch 后约 150MB、秒级启动）；
 #                  画质/美学分精度低于深度学习模型，由人工复核环节兜底。
@@ -83,19 +73,6 @@ IQA_FALLBACKS = ["dbcnn", "brisque"]      # 依次降级；全部失败则退化
 # 注意：切换后端会令 ai_models 签名变化 → 已分析库自动全量重算（见 pipeline._ai_model_signature）。
 # 也可用环境变量 LUMINA_INFERENCE_BACKEND 覆盖（轻量打包的 runtime hook 即用它注入 "heuristic"）。
 INFERENCE_BACKEND = os.environ.get("LUMINA_INFERENCE_BACKEND", "torch")
-IQA_ANALYZE_SIZE = 512                    # 画质模型输入边长
-IQA_BATCH_SIZE = 8                        # 画质模型 GPU 批大小（0=逐张）
-# 各画质模型的原始量程，用于统一归一化为 0-100（越高越好）
-IQA_RANGES = {
-    "musiq": (0.0, 100.0),      # KonIQ MOS 1-5 → pyiqa 已放大到 0-100
-    "musiq-ava": (1.0, 10.0),   # AVA 1-10
-    "musiq-koniq": (0.0, 100.0),
-    "dbcnn": (0.0, 1.0),
-    "brisque": (0.0, 100.0),    # 失真分，越低越好 —— 需反向
-    "clipiqa": (0.0, 1.0),
-    "niqe": (0.0, 100.0),       # 失真分，越低越好
-}
-IQA_LOWER_IS_BETTER = {"brisque", "niqe", "ilniqe"}   # 这几个是失真分，需反向归一
 
 # --- 【模型升级 v0.4】美学模型（真实照片优先）-------------------------------
 # 注意：musiq-ava 作为美学模型目前是【预留配置，尚未接入】—— aesthetics.py 当前

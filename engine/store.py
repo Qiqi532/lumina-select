@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 
 from . import config
 from .log import get_logger
+from .migrations import migrate_database
 
 _log = get_logger("store")
 
@@ -69,6 +71,9 @@ PHOTO_FIELDS = [
     "comp_score", "is_waste", "is_best",
     "is_uncertain", "is_candidate", "candidate_rank", "star", "label", "waste_reasons",
     "brisque", "eye_close_prob", "scene_manual", "is_similar_loser",
+    "asset_pair_id", "asset_role", "camera_model", "lens_model", "focal_length",
+    "shutter_speed", "aperture", "iso", "analysis_backend", "quality_model",
+    "scene_model", "analysis_ms", "decision_source", "decision_updated_at",
 ]
 
 
@@ -86,7 +91,11 @@ class PhotoStore:
             except Exception as e:  # pragma: no cover
                 _log.warning("启用 WAL 失败（不影响使用）：%s", e)
         self.conn.execute("PRAGMA busy_timeout=30000")
-        self._create_schema()
+        try:
+            self._create_schema()
+        except Exception:
+            self.conn.close()
+            raise
         self.integrity_check()
 
     # ------------------------------------------------------------------
@@ -108,18 +117,7 @@ class PhotoStore:
     # 基础
     # ------------------------------------------------------------------
     def _create_schema(self):
-        self.conn.executescript(PHOTOS_SCHEMA)
-        self.conn.executescript(GROUPS_SCHEMA)
-        self.conn.executescript(META_SCHEMA)
-        # 老库补齐新增列（幂等：已存在的列跳过）
-        try:
-            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(photos)").fetchall()}
-            for name, typ in MIGRATE_COLUMNS:
-                if name not in cols:
-                    self.conn.execute(f"ALTER TABLE photos ADD COLUMN {name} {typ}")
-        except Exception:
-            pass
-        self.conn.commit()
+        migrate_database(self.conn, self.db_path)
 
     # ------------------------------------------------------------------
     # 元信息
@@ -239,6 +237,108 @@ class PhotoStore:
         rows = self.conn.execute(
             "SELECT path, scene_manual FROM photos WHERE scene_manual IS NOT NULL").fetchall()
         return {r["path"]: r["scene_manual"] for r in rows}
+
+    def apply_decision(
+        self,
+        paths: list[str],
+        *,
+        star: int,
+        label: str | None,
+        source: str,
+    ) -> list[dict]:
+        """Atomically apply a decision to paths and every paired asset member."""
+        if not paths:
+            return []
+        placeholders = ",".join("?" for _ in paths)
+        selected = self.conn.execute(
+            f"SELECT path, asset_pair_id FROM photos WHERE path IN ({placeholders})",
+            paths,
+        ).fetchall()
+        pair_ids = sorted({row["asset_pair_id"] for row in selected if row["asset_pair_id"]})
+        conditions = [f"path IN ({placeholders})"]
+        arguments: list[object] = list(paths)
+        if pair_ids:
+            pair_placeholders = ",".join("?" for _ in pair_ids)
+            conditions.append(f"asset_pair_id IN ({pair_placeholders})")
+            arguments.extend(pair_ids)
+        where = " OR ".join(conditions)
+        before = [
+            self._row_to_dict(row)
+            for row in self.conn.execute(
+                "SELECT path, star, label, decision_source, decision_updated_at "
+                f"FROM photos WHERE {where} ORDER BY path",
+                arguments,
+            ).fetchall()
+        ]
+        updated_at = time.time()
+        with self.conn:
+            self.conn.execute(
+                "UPDATE photos SET star=?, label=?, decision_source=?, "
+                f"decision_updated_at=? WHERE {where}",
+                [int(star), label, source, updated_at, *arguments],
+            )
+        return before
+
+    def replace_face_regions(self, path: str, regions: list[dict]) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM face_regions WHERE path=?", (path,))
+            self.conn.executemany(
+                "INSERT INTO face_regions (path, face_index, x, y, width, height, "
+                "ear, eye_close_prob, sharpness) VALUES (?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        path,
+                        region["face_index"],
+                        region.get("x"),
+                        region.get("y"),
+                        region.get("width"),
+                        region.get("height"),
+                        region.get("ear"),
+                        region.get("eye_close_prob"),
+                        region.get("sharpness"),
+                    )
+                    for region in regions
+                ],
+            )
+
+    def face_regions(self, path: str) -> list[dict]:
+        return [
+            self._row_to_dict(row)
+            for row in self.conn.execute(
+                "SELECT * FROM face_regions WHERE path=? ORDER BY face_index", (path,)
+            ).fetchall()
+        ]
+
+    def get_preference(self, key: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM ui_preferences WHERE key=?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_preference(self, key: str, value: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO ui_preferences(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+
+    def record_export_item(
+        self,
+        path: str,
+        target_path: str,
+        xmp_path: str | None,
+        status: str,
+        error: str | None,
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO export_items(path, target_path, xmp_path, status, error, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path, target_path) DO UPDATE SET "
+                "xmp_path=excluded.xmp_path, status=excluded.status, error=excluded.error, "
+                "updated_at=excluded.updated_at",
+                (path, target_path, xmp_path, status, error, time.time()),
+            )
 
     # ------------------------------------------------------------------
     # 相似组

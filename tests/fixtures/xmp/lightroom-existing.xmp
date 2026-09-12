@@ -1,0 +1,35 @@
+<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description
+        rdf:about=""
+        xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+        xmlns:dc="http://purl.org/dc/elements/1.1/"
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        xmlns:mask="http://ns.adobe.com/camera-raw-settings/1.0/mask/"
+        xmlns:vendor="https://example.invalid/vendor/1.0/"
+        xmp:Rating="2"
+        xmp:Label="Yellow"
+        crs:Exposure2012="0.35"
+        crs:CropTop="0.125"
+        crs:CropLeft="0.050"
+        vendor:OpaqueSetting="keep-me">
+      <dc:subject>
+        <rdf:Bag>
+          <rdf:li>旅行</rdf:li>
+          <rdf:li>family</rdf:li>
+        </rdf:Bag>
+      </dc:subject>
+      <crs:MaskGroupBasedCorrections>
+        <rdf:Seq>
+          <rdf:li rdf:parseType="Resource">
+            <mask:Name>Subject 1</mask:Name>
+            <mask:What>subject</mask:What>
+          </rdf:li>
+        </rdf:Seq>
+      </crs:MaskGroupBasedCorrections>
+      <vendor:UnknownNode vendor:key="unchanged">opaque payload</vendor:UnknownNode>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>

@@ -279,6 +279,38 @@ class PhotoStore:
             )
         return before
 
+    def restore_decisions(self, before: tuple[dict, ...] | list[dict]) -> None:
+        """Restore the exact pre-decision state for all paired members atomically."""
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE photos SET star=?, label=?, decision_source=?, "
+                "decision_updated_at=? WHERE path=?",
+                [
+                    (
+                        row["star"],
+                        row["label"],
+                        row["decision_source"],
+                        row["decision_updated_at"],
+                        row["path"],
+                    )
+                    for row in before
+                ],
+            )
+
+    def review_snapshot(self) -> dict[str, list[dict]]:
+        """Read all review data in three bulk queries, never once per photo."""
+        return {
+            "photos": [self._row_to_dict(row) for row in self.conn.execute(
+                "SELECT * FROM photos ORDER BY ts, path"
+            ).fetchall()],
+            "groups": [self._row_to_dict(row) for row in self.conn.execute(
+                "SELECT * FROM groups ORDER BY id"
+            ).fetchall()],
+            "face_regions": [self._row_to_dict(row) for row in self.conn.execute(
+                "SELECT * FROM face_regions ORDER BY path, face_index"
+            ).fetchall()],
+        }
+
     def replace_face_regions(self, path: str, regions: list[dict]) -> None:
         with self.conn:
             self.conn.execute("DELETE FROM face_regions WHERE path=?", (path,))

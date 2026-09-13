@@ -27,11 +27,34 @@ datas = collect_data_files(
 
 # 随包分发的小权重模型（LAION 美学线性头约 3KB，只读，打进 _internal/models）
 import os as _os
+from importlib.util import find_spec as _find_spec
 if _os.path.isdir('models'):
     datas.append(('models', 'models'))
 # 界面样式表：app_qt.py 从 _HERE（冻结态=_internal）读取 styles.qss
 if _os.path.isfile('styles.qss'):
     datas.append(('styles.qss', '.'))
+for notice in ('NOTICE.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'release/exiftool-lumina.config'):
+    if not _os.path.isfile(notice):
+        raise FileNotFoundError(notice)
+    datas.append((notice, '.'))
+for runtime in ('exiftool.exe', 'exiftool_files'):
+    source = _os.path.join('release', 'exiftool', runtime)
+    if not _os.path.exists(source):
+        raise FileNotFoundError(source)
+    datas.append((source, 'exiftool' if runtime == 'exiftool.exe' else 'exiftool/exiftool_files'))
+
+# TorchVision 0.29's renamed native extensions are missed by the current hook.
+_torchvision = _find_spec('torchvision')
+if _torchvision is None or _torchvision.origin is None:
+    raise ModuleNotFoundError('torchvision is required for the standard edition')
+_torchvision_dir = _os.path.dirname(_torchvision.origin)
+binaries = []
+for filename in ('_C_stable.pyd', 'image_stable.pyd', 'jpeg8.dll',
+                 'libpng16.dll', 'libsharpyuv.dll', 'libwebp.dll', 'zlib.dll'):
+    source = _os.path.join(_torchvision_dir, filename)
+    if not _os.path.isfile(source):
+        raise FileNotFoundError(source)
+    binaries.append((source, 'torchvision'))
 
 # 延迟加载与注册表驱动的模块需要显式列出；其依赖由 PyInstaller hook 解析。
 hiddenimports = [
@@ -47,12 +70,15 @@ hiddenimports = [
     'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets',
     'mediapipe', 'mediapipe.python.solutions.face_mesh',
     'absl.logging', 'PIL.Image', 'cv2', 'imagehash',
+    'ui.main_window', 'ui.pages.review_page', 'ui.pages.export_page',
+    'services.review_service', 'services.export_service', 'lxml.etree',
+    'services.distribution_smoke',
 ]
 
 a = Analysis(
     [app_script],
     pathex=['.'],                      # 在项目根目录查找 engine 包与本地模块
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -60,7 +86,7 @@ a = Analysis(
     runtime_hooks=['dist_runtime_hook.py'],  # 打包前重定向 HF/TORCH 缓存目录
     excludes=[
         # 这些包未被任何源码导入，排除以减小体积
-        'timm', 'sklearn', 'matplotlib', 'tensorboard', 'wandb',
+        'pyiqa', 'timm', 'sklearn', 'matplotlib', 'tensorboard', 'wandb',
         'torchaudio',
         # 环境中同时存在 PyQt5（conda 自带，mediapipe 间接依赖）与 PyQt6，
         # PyInstaller 禁止同时打包两个 Qt 绑定 —— 本应用只用 PyQt6
@@ -74,7 +100,7 @@ a = Analysis(
         'pandas', 'h5py', 'jax', 'jaxlib', 'flax', 'dask', 'distributed',
         'IPython', 'jupyter', 'notebook', 'ipykernel', 'streamlit',
         'pytest', 'sphinx', 'docutils',
-        'seaborn', 'plotly', 'sympy',
+        'seaborn', 'plotly',
     ],
     noarchive=False,
     optimize=0,

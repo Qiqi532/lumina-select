@@ -29,6 +29,15 @@ import os as _os
 # 界面样式表
 if _os.path.isfile('styles.qss'):
     datas.append(('styles.qss', '.'))
+for notice in ('NOTICE.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'release/exiftool-lumina.config'):
+    if not _os.path.isfile(notice):
+        raise FileNotFoundError(notice)
+    datas.append((notice, '.'))
+for runtime in ('exiftool.exe', 'exiftool_files'):
+    source = _os.path.join('release', 'exiftool', runtime)
+    if not _os.path.exists(source):
+        raise FileNotFoundError(source)
+    datas.append((source, 'exiftool' if runtime == 'exiftool.exe' else 'exiftool/exiftool_files'))
 
 hiddenimports = [
     'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets',
@@ -36,6 +45,9 @@ hiddenimports = [
     'absl.logging',
     'PIL.Image',
     'cv2', 'imagehash',
+    'ui.main_window', 'ui.pages.review_page', 'ui.pages.export_page',
+    'services.review_service', 'services.export_service', 'lxml.etree',
+    'services.distribution_smoke',
 ]
 
 a = Analysis(

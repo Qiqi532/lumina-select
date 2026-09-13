@@ -49,8 +49,26 @@ def test_standard_spec_collects_only_required_model_families():
     assert "collect_submodules" not in spec
     assert "transformers.models.clip.modeling_clip" in spec
     assert "transformers.models.vit.modeling_vit" in spec
-    assert "pyiqa" not in spec.casefold()
+    assert "'pyiqa'" in spec.split("excludes=[", 1)[1]
+    assert "pyiqa" not in spec.split("hiddenimports =", 1)[1].split("a = Analysis", 1)[0]
     assert "modules/face_landmark/**" in spec
+
+
+def test_standard_runtime_initializes_torch_before_ui_mediapipe():
+    hook = _text("dist_runtime_hook.py")
+    assert "import torch" in hook
+    assert "import torch" not in _text("dist_runtime_hook_light.py")
+
+
+def test_standard_spec_keeps_torch_model_dependencies_and_native_torchvision():
+    spec = _text("光影选片助手_dist.spec")
+    excluded = spec.split("excludes=[", 1)[1].split("noarchive=", 1)[0]
+    assert "'sympy'" not in excluded
+    for filename in (
+        "_C_stable.pyd", "image_stable.pyd", "jpeg8.dll", "libpng16.dll",
+        "libsharpyuv.dll", "libwebp.dll", "zlib.dll",
+    ):
+        assert filename in spec
 
 
 def test_pytest_config_is_cp936_readable():
@@ -92,3 +110,41 @@ def test_requirement_inputs_separate_runtime_editions():
     assert "torch" not in lightweight and "transformers" not in lightweight
     assert "pyiqa" not in standard + lightweight + development
     assert "pytest-qt" in development and "pip-tools" in development
+
+
+def test_both_specs_bundle_v05_runtime_and_notices():
+    for name in ("光影选片助手_dist.spec", "光影选片助手_dist_lightweight.spec"):
+        spec = _text(name)
+        for required in ("ui", "services", "lxml", "exiftool.exe", "exiftool_files", "styles.qss", "THIRD_PARTY_NOTICES.md", "NOTICE.md"):
+            assert required in spec, (name, required)
+        assert "'exiftool/exiftool_files'" in spec
+    standard = _text("光影选片助手_dist.spec")
+    light = _text("光影选片助手_dist_lightweight.spec")
+    assert "'pyiqa'" in standard.split("excludes=[", 1)[1]
+    for excluded in ("'torch'", "'torchvision'", "'transformers'", "'pyiqa'"):
+        assert excluded in light
+
+
+def test_build_scripts_gate_packaging_in_order():
+    for name in ("build_dist.bat", "build_dist_lightweight.bat"):
+        script = _text(name).casefold()
+        positions = [script.index(fragment) for fragment in (
+            "verify_exiftool.py", "-m pytest", "check_release_licenses.py",
+            "test_distribution_contracts.py", "-m pyinstaller",
+        )]
+        assert positions == sorted(positions), name
+        assert "if errorlevel 1 exit /b 1" in script
+        assert "pause" not in script
+
+
+def test_installers_are_distinct_development_candidates_with_notices():
+    standard = _text("installer.iss")
+    light = _text("installer_lightweight.iss")
+    assert "OutputBaseFilename=LuminaSelect-v0.5-standard-dev-candidate" in standard
+    assert "OutputBaseFilename=LuminaSelect-v0.5-lightweight-dev-candidate" in light
+    for installer in (standard, light):
+        assert "THIRD_PARTY_NOTICES.md" in installer
+        assert "NOTICE.md" in installer
+        assert 'Source: "{#MySourceDir}\\_internal\\THIRD_PARTY_NOTICES.md"' in installer
+        assert "{uninstallexe}" in installer
+        assert '#define MyAppVersion "0.5.0"' in installer

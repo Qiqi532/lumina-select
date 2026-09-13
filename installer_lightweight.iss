@@ -5,9 +5,9 @@
 
 #define MyAppName "光影选片助手轻量版"
 #define MyAppNameEn "Lumina Select Lightweight"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "Lumina Select / 光影选片助手"
-#define MyAppURL "https://github.com/"
+#define MyAppURL "https://github.com/Qiqi532/lumina-select"
 #define MySourceDir "dist_light\光影选片助手"
 #define MyOutputDir "Output_light"
 
@@ -25,7 +25,7 @@ DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\光影选片助手.exe
 OutputDir={#MyOutputDir}
-OutputBaseFilename=光影选片助手轻量版_setup
+OutputBaseFilename=LuminaSelect-v0.5-lightweight-dev-candidate
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -38,6 +38,8 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MySourceDir}\_internal\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\_internal\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\光影选片助手.exe"; Tasks: desktopicon

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from importlib import metadata
+import json
 from pathlib import Path
 import re
 import sys
@@ -123,7 +124,8 @@ def audit_requirements(
 
 
 def render_notices(
-    requirements_text: str, installed: Mapping[str, PackageMetadata]
+    requirements_text: str, installed: Mapping[str, PackageMetadata],
+    *, exiftool_lock: Mapping[str, object] | None = None,
 ) -> str:
     locked = locked_packages(requirements_text)
     lines = [
@@ -146,6 +148,14 @@ def render_notices(
         lines.append(
             f"| {item.name} | {item.version} | {license_text} | {home_page} |"
         )
+    if exiftool_lock is not None:
+        lines.append(
+            f"| ExifTool | {exiftool_lock['version']} | "
+            f"{_notice_field(str(exiftool_lock['license_choice']))} | "
+            f"{exiftool_lock['official_project_url']} |"
+        )
+        lines.extend(("", "ExifTool Windows archive SHA-256: "
+                      f"`{exiftool_lock['archive_sha256']}`."))
     lines.append("")
     return "\n".join(lines)
 
@@ -170,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         "--approvals", type=Path, default=Path("release/license-approvals.toml")
     )
     parser.add_argument("--notices", type=Path, default=Path("THIRD_PARTY_NOTICES.md"))
+    parser.add_argument("--exiftool-lock", type=Path, default=Path("release/exiftool.lock.json"))
     args = parser.parse_args(argv)
 
     requirements_text = args.requirements.read_text(encoding="utf-8")
@@ -183,8 +194,10 @@ def main(argv: list[str] | None = None) -> int:
         release=args.release,
         approvals=approvals,
     )
+    exiftool_lock = json.loads(args.exiftool_lock.read_text(encoding="utf-8"))
     args.notices.write_text(
-        render_notices(requirements_text, installed), encoding="utf-8", newline="\n"
+        render_notices(requirements_text, installed, exiftool_lock=exiftool_lock),
+        encoding="utf-8", newline="\n"
     )
     for issue in issues:
         print(f"{issue.code}: {issue.package}: {issue.message}", file=sys.stderr)

@@ -58,3 +58,7 @@ def _install_crash_logger():
 
 
 _install_crash_logger()
+
+# The standard frozen build must initialize Torch's native DLLs before the
+# UI imports MediaPipe. This imports no CLIP/ViT weights or runs inference.
+import torch  # noqa: F401

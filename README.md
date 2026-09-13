@@ -7,7 +7,7 @@
 
 **关键指标**（RTX 4060 Laptop，1000 张实测）：全流程 63.9 s（验收 ≤5 min）；增量重分析 3.87 s；断点续跑、分块流式内存控制（5000+ 张不爆内存）；pytest 单测 + 端到端冒烟。
 
-> 当前版本 v0.4.0（可靠性与模型选型大修）。设计文档见上级目录 `PRD_智能选片工具/`。
+> 当前为 v0.5 开发候选，非正式发行。Lightroom 实机验收与 PyQt6/Qt 发行许可人工批准仍待完成；记录表见 `docs/v0.5-manual-acceptance.md`。旧版性能数字仅供历史参考。
 
 ---
 
@@ -21,13 +21,13 @@
 | 画质/美学评分 | 两版共享确定性的 OpenCV 清晰度/曝光/对比度技术评分；标准版使用 LAION 线性头→CLIP 提示词进行美学评分 |
 | 最佳帧推荐 | 组内综合评分（清晰/曝光/美学/人脸），Top1 自动 5 星 |
 | 不确定甄选 | 无明确胜者（分差小/帕累托冲突/场景置信低）时进入人工甄选（A/B/C/D 选择） |
-| 一键导出 | CSV 清单 + 复制保留文件到导出目录 |
+| Lightroom 交付 | 按 RAW、RAW+JPEG、JPEG 资产模式复制到新目录；相机 RAW 写 XMP sidecar，JPEG/TIFF/PSD/DNG 仅修改导出副本内 XMP；失败可报告和重试 |
 
 ### 人工复核快捷键（Photo Mechanic 风格）
 ```
 0-5 标星 · P 保留 / X 排除 · A/B/C/D 选候选 · Tab/→ 下一组 · ← 上一组 · Esc 退出
 ```
-复核页还有「总览排行榜」：全局综合分排序、星级/废片/场景/推荐帧过滤、多字段排序、**场景手动修正入口**（写库持久，重分析不被覆盖）。
+v0.5 复核页提供虚拟胶片带、单图/对比画布、候选排行、全量技术面板、筛选、撤销和资产级人工决定；RAW+JPEG 是同一资产，成员可同步决定，不互相判作重复废片。
 
 ---
 
@@ -76,7 +76,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app_qt.py
 ```
 
-NVIDIA 用户可先在 `.venv` 中安装与本机 CUDA 匹配的 Torch/TorchVision，再安装 `requirements.txt`；其中的版本范围不会替换已兼容的 GPU 构建。
+NVIDIA 用户如需 CUDA 构建，应先按锁定版本选择匹配的 Torch/TorchVision wheel；变更版本必须重新锁定、测试并构建，不能视为与当前候选包等价。
 
 ### OpenCV 轻量版：安装与运行
 ```bash
@@ -90,6 +90,18 @@ set LUMINA_INFERENCE_BACKEND=heuristic
 > 已打包的自包含 exe 见下方「打包成 exe · 方案 A」，双击 `dist\光影选片助手\光影选片助手.exe` 即用，无需 .venv。
 
 ### 📦 打包成 exe（Windows 软件形态）
+
+构建前从 `release/exiftool.lock.json` 中的 `official_download_url` 获取固定的
+`exiftool-13.59_64.zip`，放在 `release/`；脚本首先校验长度和 SHA-256，再从归档
+暂存运行目录。归档和运行文件均为本地忽略产物，不提交到 Git。构建脚本还会运行
+包含 e2e 的完整 pytest、许可证开发检查及打包契约测试；失败即停止。仅可生成
+开发候选包，`--release` 会被拒绝。单独检查可运行：
+
+```powershell
+.\.venv-light\Scripts\python.exe scripts\verify_exiftool.py
+.\.venv-light\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-light.json
+.\.venv\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-standard.json
+```
 
 #### Torch 标准版：自包含 onedir 构建
 把全部依赖（torch / transformers / PyQt6 / mediapipe / 等）一并打进一个文件夹，双击 `光影选片助手.exe` 即可运行，**不要求源码或 .venv 在场**：
@@ -109,7 +121,7 @@ set ZIP=1 & build_dist.bat
 ```bash
 # 1) 先有方案 A 产物 dist\光影选片助手\
 # 2) 用 Inno Setup Compiler 打开 installer.iss 并编译（或命令行 ISCC.exe installer.iss）
-# 3) 产出 Output\光影选片助手_setup.exe
+# 3) 仅产出 Output\LuminaSelect-v0.5-standard-dev-candidate.exe
 ```
 - 安装后提供**桌面快捷方式 + 开始菜单项 + 标准卸载**；卸载时默认清理 `.hf_cache`/`.torch_cache` 模型缓存（见 `installer.iss`）。
 - 提示：模型会下载进安装目录，建议安装到有写入权限的位置；当前安装器使用用户级安装权限。
@@ -146,7 +158,7 @@ set ZIP=1 & build_dist_lightweight.bat
   可选 `torch`（标准，精度高）/ `heuristic`（轻量，离线）。轻量打包由
   `dist_runtime_hook_light.py` 强制写入 `heuristic`，开发态默认仍为 `torch`。
 - 对应规格：`光影选片助手_dist_lightweight.spec`（排除 torch/transformers/pyiqa，保留 PyQt6/MediaPipe/opencv）。
-- 轻量安装包：用 Inno Setup 编译 `installer_lightweight.iss`，输出到 `Output_light\光影选片助手轻量版_setup.exe`；它与标准版 `installer.iss`、`Output\` 完全独立，可并存安装。
+- 轻量安装包：用 Inno Setup 编译 `installer_lightweight.iss`，输出到 `Output_light\LuminaSelect-v0.5-lightweight-dev-candidate.exe`；它与标准版独立，可并存安装。
 - **2026-09-07 本机实测**：PyInstaller 6.22.2 最终构建约 97 秒，产物 411.1 MiB / 356 个文件；Inno Setup 安装包 103.4 MiB；
   不含 torch、transformers、pyiqa、tensorflow、jax、pytest 或 Sphinx。体积主要来自
   OpenCV-Contrib、MediaPipe FaceMesh、PyQt6 与 ImageHash 所需 SciPy。
@@ -178,6 +190,12 @@ python make_perf_data.py 1000
 # 常规测试（含 quality/similarity/faces/scorer/store/pipeline/发行契约）
 python -m pytest tests
 
+# 两版完整测试（包含默认标记排除的 e2e；不触发模型下载）
+$env:QT_QPA_PLATFORM='offscreen'
+$env:LUMINA_INFERENCE_BACKEND='heuristic'
+.\.venv-light\Scripts\python.exe -m pytest -q -o addopts=
+.\.venv\Scripts\python.exe -m pytest -q -o addopts=
+
 # 端到端冒烟（构造含连拍/模糊/过曝/清晰的图片集，跑通全链，较慢）
 python -m pytest tests -m e2e
 ```
@@ -185,6 +203,8 @@ python -m pytest tests -m e2e
 ---
 
 ## ⚡ 性能基准（实测）
+
+以下 GPU 全流程数字是 v0.4 历史测量，不能替代 v0.5 真实 Lightroom 验收。v0.5 复核 DTO 基准请运行上文 `scripts/benchmark_review.py`：首次加载必须 `<3s`、每个筛选 `<0.3s`，JSON 记录机器与 Qt/Python 版本。
 
 **测试机**：Windows 11 · Python 3.12.12 · **NVIDIA GeForce RTX 4060 Laptop GPU**（CUDA）
 **数据集**：`data/perf` 1000 张（1920×1080 级合成 JPEG/PNG，含连拍/废片/相似）
@@ -247,5 +267,5 @@ python -m pytest tests -m e2e
 **Q：RAW 支持吗？**
 扩展名识别已内置；安装 `rawpy` 后自动启用。未安装时仅处理 JPEG/PNG，不影响主流程。
 
-**Q：能不能导出 Lightroom/Photo Mechanic 可读的星级？**
-当前 MVP 提供 CSV 清单 + 复制原文件。XMP 星级写回（需 pyexiv2）列为后续路线。
+**Q：能不能导出 Lightroom Classic 可读的星级和颜色？**
+v0.5 写入 XMP 星级与 Green/Yellow/Red 标签；相机 RAW 仅写 sidecar，非 RAW 只写交付副本。真实 Lightroom Classic 读取和原有调整保留仍待人工验收。

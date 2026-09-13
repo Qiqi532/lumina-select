@@ -53,11 +53,16 @@ Thumbs.db
 build/
 build-cpu/
 build_light/
+build-tools/
 dist/
 dist-cpu/
 dist_light/
 Output/
 Output_light/
+release/exiftool/
+release/exiftool-stage-*/
+release/exiftool-13.59_64.zip
+benchmark-*.json
 *.spec
 光影选片助手.exe
 # 打包态崩溃日志（_install_crash_logger 写到 exe 旁）

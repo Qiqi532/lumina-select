@@ -100,3 +100,19 @@ def test_notices_do_not_embed_full_license_bodies():
     package_row = next(line for line in notices.splitlines() if line.startswith("| sample"))
     assert "full license body" not in package_row
     assert len(package_row) < 300
+
+
+def test_notices_include_locked_exiftool_runtime():
+    notices = render_notices(
+        "sample==1.0.0\n",
+        {"sample": _package("sample")},
+        exiftool_lock={
+            "version": "13.59",
+            "archive_sha256": "a" * 64,
+            "license_choice": "Artistic License 1.0 or GNU GPL version 1 or later",
+            "official_project_url": "https://exiftool.org/",
+        },
+    )
+    assert "ExifTool" in notices
+    assert "13.59" in notices
+    assert "a" * 64 in notices

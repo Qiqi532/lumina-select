@@ -87,20 +87,6 @@ class MainWindow(QMainWindow):
         self.analyze_page.cancelled.connect(lambda: self.status("分析已取消"))
         self.goto("import")
 
-    @staticmethod
-    def _placeholder(title: str, text: str) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        heading = QLabel(title)
-        heading.setObjectName("PageTitle")
-        subtitle = QLabel(text)
-        subtitle.setObjectName("PageSub")
-        layout.addWidget(heading)
-        layout.addWidget(subtitle)
-        layout.addStretch(1)
-        return page
-
     @property
     def current_page(self) -> QWidget:
         return self.stack.currentWidget()

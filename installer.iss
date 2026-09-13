@@ -8,7 +8,7 @@
 ;   1) 先执行 build_dist.bat 生成 dist\光影选片助手\
 ;   2) 用 Inno Setup Compiler 打开本文件并编译（或命令行：
 ;      ISCC.exe installer.iss）
-;   3) 产出 Output\光影选片助手_setup.exe
+;   3) 产出 Output\LuminaSelect-v0.5-standard-dev-candidate.exe
 ;
 ; 说明：本脚本不打包模型权重；首次运行由各 exe 自动下载到安装目录
 ;       .hf_cache / .torch_cache（见 dist_runtime_hook.py）。
@@ -17,9 +17,9 @@
 
 #define MyAppName "光影选片助手"
 #define MyAppNameEn "Lumina Select"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "Lumina Select / 光影选片助手"
-#define MyAppURL "https://github.com/"
+#define MyAppURL "https://github.com/Qiqi532/lumina-select"
 ; 自包含 onedir 产物目录（相对本 .iss 文件）
 #define MySourceDir "dist\光影选片助手"
 #define MyOutputDir "Output"
@@ -42,7 +42,7 @@ PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\光影选片助手.exe
 ; 输出
 OutputDir={#MyOutputDir}
-OutputBaseFilename={#MyAppName}_setup
+OutputBaseFilename=LuminaSelect-v0.5-standard-dev-candidate
 Compression=lzma2
 SolidCompression=yes
 ; 本应用由 64 位 Python 构建，仅允许支持 x64 应用的 Windows
@@ -60,6 +60,8 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; 递归拷贝整个 onedir 文件夹（含 exe + 全部依赖）
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MySourceDir}\_internal\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\_internal\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; 桌面快捷方式

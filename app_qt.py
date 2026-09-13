@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 import traceback
+import json
+import tempfile
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -37,6 +39,23 @@ def _install_exception_handler() -> None:
 
 def main() -> int:
     _install_exception_handler()
+    if "--smoke-dist" in sys.argv:
+        position = sys.argv.index("--smoke-dist")
+        report_path = Path(sys.argv[position + 1])
+        from services.distribution_smoke import run_smoke_payload
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="lumina-frozen-smoke-") as directory:
+                report = run_smoke_payload(Path(directory))
+            report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+            return 0 if all(report[key] for key in (
+                "frozen", "started", "analyzed", "exported", "source_unchanged", "delivery_exists"
+            )) else 1
+        except Exception as error:
+            report_path.write_text(json.dumps({
+                "error": str(error), "traceback": traceback.format_exc(),
+            }), encoding="utf-8")
+            return 1
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     qss_path = Path(__file__).resolve().parent / "styles.qss"

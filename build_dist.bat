@@ -14,13 +14,27 @@ rem        set ZIP=1 & build_dist.bat
 rem ===========================================================================
 setlocal
 cd /d "%~dp0"
+if "%~1"=="--release" (
+    echo [错误] 正式发行须先完成人工 Lightroom 与 Qt 许可验收；本脚本只生成开发候选包。
+    exit /b 2
+)
 
 set "PY=%~dp0.venv\Scripts\python.exe"
 if not exist "%PY%" (
     echo [错误] 未找到 .venv，请先创建虚拟环境并安装依赖（见 README）。
-    pause
     exit /b 1
 )
+
+"%PY%" scripts\verify_exiftool.py
+if errorlevel 1 exit /b 1
+set "QT_QPA_PLATFORM=offscreen"
+set "LUMINA_INFERENCE_BACKEND=heuristic"
+"%PY%" -m pytest -q -o addopts=
+if errorlevel 1 exit /b 1
+"%PY%" scripts\check_release_licenses.py --requirements requirements.txt --policy release\license-policy.toml
+if errorlevel 1 exit /b 1
+"%PY%" -m pytest -q tests\test_distribution_contracts.py
+if errorlevel 1 exit /b 1
 
 echo.
 echo ============================================================
@@ -34,11 +48,11 @@ echo.
 
 echo 打包中（首次约 3~8 分钟，取决于 torch/CUDA 体积）…
 "%PY%" -m PyInstaller --noconfirm --clean 光影选片助手_dist.spec
+if errorlevel 1 exit /b 1
 
 if not exist "%~dp0dist\光影选片助手\光影选片助手.exe" (
     echo.
     echo [错误] 打包失败，请查看上方报错。
-    pause
     exit /b 1
 )
 
@@ -56,9 +70,8 @@ if "%ZIP%"=="1" (
         echo [警告] zip 打包失败，可手动压缩 dist\光影选片助手\ 文件夹。
     )
 ) else (
-    echo 提示：运行  set ZIP=1 & build_dist.bat  可额外生成 zip 压缩包。
+    echo 提示：运行  set ZIP=1 ^& build_dist.bat  可额外生成 zip 压缩包。
 )
 
 echo.
 echo 下一步（制作安装包，可选）：用 Inno Setup 编译 installer.iss
-pause

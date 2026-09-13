@@ -23,7 +23,8 @@ Qt 组件、ExifTool 和模型权重仍受各自条款约束；自动检查是�
 | MediaPipe Face Mesh / Face Detection | 两版人脸关键点与 EAR | Google | Apache-2.0 |
 | rawpy / LibRaw | RAW 解码 | rawpy / LibRaw | MIT；LibRaw 采用 LGPL/CDDL 双许可 |
 | lxml | RAW XMP sidecar XML 合并 | lxml project | BSD-3-Clause |
-| ExifTool | 导出副本的非 RAW 文件内 XMP | Phil Harvey | Artistic License 1.0 / GPL；版本与 SHA-256 另行锁定 |
+| ExifTool 13.59 | 导出副本的非 RAW 文件内 XMP | Phil Harvey | Artistic License 1.0 / GPL；Windows 归档 SHA-256 `44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec`，见 `release/exiftool.lock.json` |
 
 标准版允许在本地缺少模型时下载 CLIP/ViT 权重；轻量版不包含 Torch、Transformers
 或模型下载。任何正式候选都应以实际打包内容重新生成第三方清单并完成许可人工复核。
+两个 v0.5 安装器仅输出明确标记的开发候选包；尚未取得 Qt 许可批准，也未完成 Lightroom 实机验收。

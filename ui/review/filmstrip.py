@@ -28,7 +28,7 @@ def _load_qimage(path: str) -> QImage:
 
 
 class FilmstripModel(QAbstractListModel):
-    thumbnail_finished = pyqtSignal(str, object)
+    thumbnail_finished = pyqtSignal(int, str, object)
 
     AssetIdRole = int(Qt.ItemDataRole.UserRole) + 1
     StarRole = AssetIdRole + 1
@@ -59,6 +59,8 @@ class FilmstripModel(QAbstractListModel):
         self._futures: dict[str, Future] = {}
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lumina-thumb")
         self._closed = False
+        self._generation = 0
+        self._cache_paths = {item.asset_id: item.preview_path for item in self.items}
         self._visible_window: tuple[int, int] | None = None
         self.thumbnail_finished.connect(
             self._thumbnail_ready, Qt.ConnectionType.QueuedConnection
@@ -114,6 +116,8 @@ class FilmstripModel(QAbstractListModel):
         future = self._executor.submit(self.thumbnail_loader, item.preview_path)
         self._futures[item.asset_id] = future
 
+        generation = self._generation
+
         def finished(completed: Future, asset_id: str = item.asset_id) -> None:
             try:
                 image = completed.result()
@@ -122,12 +126,12 @@ class FilmstripModel(QAbstractListModel):
             except Exception:
                 image = QImage()
             if not self._closed:
-                self.thumbnail_finished.emit(asset_id, image)
+                self.thumbnail_finished.emit(generation, asset_id, image)
 
         future.add_done_callback(finished)
 
-    def _thumbnail_ready(self, asset_id: str, image: QImage) -> None:
-        if asset_id not in self._futures:
+    def _thumbnail_ready(self, generation: int, asset_id: str, image: QImage) -> None:
+        if generation != self._generation or asset_id not in self._futures:
             return
         self._futures.pop(asset_id, None)
         if image.isNull():
@@ -167,6 +171,16 @@ class FilmstripModel(QAbstractListModel):
                 self._futures.pop(asset_id, None)
 
     def replace_items(self, items: list[ReviewItem]) -> None:
+        self._generation += 1
+        for future in self._futures.values():
+            future.cancel()
+        self._futures.clear()
+        next_paths = {item.asset_id: item.preview_path for item in items}
+        for asset_id in list(self._cache):
+            if self._cache_paths.get(asset_id) != next_paths.get(asset_id):
+                _, pixels = self._cache.pop(asset_id)
+                self._cached_pixels -= pixels
+        self._cache_paths = next_paths
         self.beginResetModel()
         self.items = list(items)
         self.endResetModel()

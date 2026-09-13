@@ -97,7 +97,8 @@ class PhotoViewport(QGraphicsView):
 
 
 class CanvasWidget(QWidget):
-    image_finished = pyqtSignal(str, object)
+    image_finished = pyqtSignal(int, str, object)
+    image_ready = pyqtSignal(str, object)
 
     def __init__(
         self,
@@ -119,6 +120,8 @@ class CanvasWidget(QWidget):
         self._pending: dict[str, Future] = {}
         self._cache: OrderedDict[tuple[str, int], QImage] = OrderedDict()
         self._closed = False
+        self._generation = 0
+        self._cache_paths: dict[str, str] = {}
         self.image_finished.connect(self._on_image, Qt.ConnectionType.QueuedConnection)
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(4, 4, 4, 4)
@@ -129,20 +132,28 @@ class CanvasWidget(QWidget):
     def pending_count(self) -> int:
         return len(self._pending)
 
-    def set_items(self, items: list[ReviewItem], mode: ViewMode) -> None:
+    def set_items(
+        self, items: list[ReviewItem], mode: ViewMode, *, selected_id: str | None = None
+    ) -> None:
+        self._generation += 1
+        for future in self._pending.values():
+            future.cancel()
+        self._pending.clear()
         if not items:
             self._items = []
             self._selected_id = None
         else:
             self._items = list(items[:5])
-            self._selected_id = self._items[0].asset_id
+            available = {item.asset_id for item in self._items}
+            self._selected_id = selected_id if selected_id in available else self._items[0].asset_id
         self._return_mode = None
         self._inspect_100 = False
         self.mode = ViewMode(mode)
         active_ids = {item.asset_id for item in self._items}
-        for asset_id, future in list(self._pending.items()):
-            if asset_id not in active_ids and future.cancel():
-                self._pending.pop(asset_id, None)
+        for item in self._items:
+            if self._cache_paths.get(item.asset_id) not in (None, item.preview_path):
+                self._cache.pop((item.asset_id, 2500), None)
+            self._cache_paths[item.asset_id] = item.preview_path
         for key in list(self._cache):
             if key[0] not in active_ids:
                 self._cache.pop(key)
@@ -188,6 +199,8 @@ class CanvasWidget(QWidget):
         future = self._executor.submit(self.image_loader, item.preview_path)
         self._pending[item.asset_id] = future
 
+        generation = self._generation
+
         def finished(completed: Future, asset_id: str = item.asset_id) -> None:
             try:
                 image = completed.result()
@@ -196,12 +209,12 @@ class CanvasWidget(QWidget):
             except Exception:
                 image = QImage()
             if not self._closed:
-                self.image_finished.emit(asset_id, image)
+                self.image_finished.emit(generation, asset_id, image)
 
         future.add_done_callback(finished)
 
-    def _on_image(self, asset_id: str, image: QImage) -> None:
-        if asset_id not in self._pending:
+    def _on_image(self, generation: int, asset_id: str, image: QImage) -> None:
+        if generation != self._generation or asset_id not in self._pending:
             return
         self._pending.pop(asset_id, None)
         if not image.isNull():
@@ -215,6 +228,7 @@ class CanvasWidget(QWidget):
                 view.set_image(image)
                 if self._inspect_100 and not image.isNull():
                     view.set_zoom(1.0)
+        self.image_ready.emit(asset_id, image)
 
     def toggle_view(self) -> ViewMode:
         if self.review_service is not None:

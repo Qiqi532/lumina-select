@@ -61,6 +61,8 @@ class ReviewService:
         self.filter_star: int | None = None
         self.items: dict[str, ReviewItem] = {}
         self.groups: dict[int, ReviewGroup] = {}
+        self.photo_rows: dict[str, dict] = {}
+        self.face_rows: dict[str, list[dict]] = {}
         self.queue: list[ReviewItem] = []
         self.cursor = 0
         self._undo_stack: list[DecisionSnapshot] = []
@@ -125,6 +127,10 @@ class ReviewService:
         previous_id = self.current.asset_id if self.current else None
         previous_index = self.cursor
         snapshot = self.store.review_snapshot()
+        self.photo_rows = {row["path"]: row for row in snapshot["photos"]}
+        self.face_rows = {}
+        for region in snapshot["face_regions"]:
+            self.face_rows.setdefault(region["path"], []).append(region)
         grouped: dict[str, list[dict]] = {}
         for row in snapshot["photos"]:
             grouped.setdefault(row.get("asset_pair_id") or row["path"], []).append(row)
@@ -152,6 +158,13 @@ class ReviewService:
             for group_id, ids in groups.items()
         }
         self._rebuild_queue(previous_id, previous_index)
+
+    def inspector_data(self, asset_id: str) -> tuple[dict, list[dict]]:
+        item = self.items.get(asset_id)
+        if item is None:
+            return {}, []
+        path = item.preview_path
+        return self.photo_rows.get(path, {}), self.face_rows.get(path, [])
 
     def _matches(self, item: ReviewItem, name: ReviewFilter, star: int | None) -> bool:
         if name == ReviewFilter.ALL:

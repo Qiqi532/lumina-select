@@ -43,6 +43,17 @@ class ExportItemResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ExportPlan:
+    asset_count: int
+    file_count: int
+    xmp_count: int
+    total_bytes: int
+    nonempty_target: bool
+    conflicts: tuple[Path, ...]
+    affected_paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _Candidate:
     source: Path
     target: Path
@@ -146,6 +157,38 @@ class ExportService:
         )
         return item
 
+    def plan(self, request: ExportRequest) -> ExportPlan:
+        candidates = self._candidates(request)
+        eligible = [item for item in candidates if item.problem is None]
+        conflicts = tuple(
+            item.target
+            for item in eligible
+            if request.write_mode == "copy" and item.target.exists()
+        )
+        affected = tuple(
+            item.xmp_path
+            for item in eligible
+            if item.xmp_path is not None
+        )
+        return ExportPlan(
+            asset_count=len(set(request.selected_asset_ids) & self.assets.keys()),
+            file_count=len(eligible),
+            xmp_count=sum(
+                item.xmp_path is not None
+                or item.source.suffix.casefold() in EMBEDDED_XMP_EXTS
+                for item in eligible
+            ),
+            total_bytes=sum(
+                item.source.stat().st_size for item in eligible if item.source.is_file()
+            ) if request.write_mode == "copy" else 0,
+            nonempty_target=(
+                request.target_dir.is_dir() and any(request.target_dir.iterdir())
+                if request.write_mode == "copy" else False
+            ),
+            conflicts=conflicts,
+            affected_paths=affected,
+        )
+
     @staticmethod
     def _copy_atomic(source: Path, target: Path, copier: Callable) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +284,7 @@ class ExportService:
         progress: Callable[[int, int], None] | None = None,
         *,
         only_sources: set[str] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> list[ExportItemResult]:
         if request.write_mode not in {"copy", "in-place-xmp"}:
             raise ValueError(f"unsupported write mode: {request.write_mode}")
@@ -273,7 +317,13 @@ class ExportService:
 
         results = []
         for index, candidate in enumerate(candidates, 1):
-            result = self._execute_one(candidate, request)
+            if cancel_check is not None and cancel_check():
+                result = ExportItemResult(
+                    candidate.source, candidate.target, candidate.xmp_path,
+                    "skipped", "cancelled", "export cancelled before this file",
+                )
+            else:
+                result = self._execute_one(candidate, request)
             results.append(self._record(result))
             if progress is not None:
                 progress(index, total)
@@ -283,6 +333,8 @@ class ExportService:
         self,
         request: ExportRequest,
         progress: Callable[[int, int], None] | None = None,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> list[ExportItemResult]:
         requested = {
             (str(item.source), str(item.target)) for item in self._candidates(request)
@@ -292,4 +344,6 @@ class ExportService:
             for row in self.store.failed_export_items()
             if (row["path"], row["target_path"]) in requested
         }
-        return self.run(request, progress, only_sources=failed)
+        return self.run(
+            request, progress, only_sources=failed, cancel_check=cancel_check
+        )

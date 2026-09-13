@@ -281,3 +281,41 @@ def test_in_place_raw_failure_can_retry_same_request(tmp_path):
         assert (source / "IMG_0001.xmp").exists()
     finally:
         store.close()
+
+
+def test_export_plan_reports_preview_and_nonempty_target(tmp_path):
+    _, assets, store = _setup(tmp_path)
+    delivery = tmp_path / "delivery"
+    delivery.mkdir()
+    (delivery / "unrelated.txt").write_bytes(b"existing")
+    try:
+        plan = ExportService(store, assets, metadata_writer=_MetadataWriter()).plan(
+            _request(tmp_path, assets)
+        )
+        assert (plan.asset_count, plan.file_count, plan.xmp_count) == (1, 2, 2)
+        assert plan.total_bytes > 0
+        assert plan.nonempty_target is True
+    finally:
+        store.close()
+
+
+def test_cancel_after_atomic_item_skips_remainder(tmp_path):
+    _, assets, store = _setup(tmp_path, names=("IMG_0001.CR3", "IMG_0002.CR3"))
+    cancel = False
+
+    def on_progress(done, _total):
+        nonlocal cancel
+        if done == 1:
+            cancel = True
+
+    try:
+        results = ExportService(store, assets).run(
+            _request(tmp_path, assets, "raw"),
+            progress=on_progress,
+            cancel_check=lambda: cancel,
+        )
+        assert [item.status for item in results] == ["success", "skipped"]
+        assert results[1].error_code == "cancelled"
+        assert sum(path.suffix == ".CR3" for path in (tmp_path / "delivery").iterdir()) == 1
+    finally:
+        store.close()

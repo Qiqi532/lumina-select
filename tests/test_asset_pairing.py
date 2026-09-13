@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from services.asset_pairing import pair_assets
+from services.asset_pairing import assets_from_rows, pair_assets
 
 
 def _pair(tmp_path, names, timestamps):
@@ -96,3 +96,19 @@ def test_missing_requested_member_returns_reason(tmp_path):
     assert raw.members_for_mode("raw") == ((raw.raw_path,), None)
     with pytest.raises(ValueError, match="asset mode"):
         raw.members_for_mode("invalid")
+
+
+def test_saved_asset_pairing_can_be_reconstructed_without_redecoding_exif(tmp_path):
+    raw = tmp_path / "IMG_0001.CR3"
+    jpeg = tmp_path / "IMG_0001.JPG"
+    rows = [
+        {"path": str(raw), "asset_pair_id": "saved-pair", "asset_role": "raw"},
+        {"path": str(jpeg), "asset_pair_id": "saved-pair", "asset_role": "jpeg"},
+    ]
+
+    assets = assets_from_rows(rows)
+
+    assert len(assets) == 1
+    assert assets[0].asset_id == "saved-pair"
+    assert assets[0].raw_path == raw
+    assert assets[0].jpeg_path == jpeg

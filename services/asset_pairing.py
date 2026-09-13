@@ -115,3 +115,31 @@ def pair_assets(
             assets.append(_asset(path.parent, path.stem, None, path))
 
     return sorted(assets, key=lambda item: (item.asset_id, _canonical(item.preview_path)))
+
+
+def assets_from_rows(rows: Iterable[dict]) -> list[AssetPair]:
+    """Rehydrate saved asset identities without scanning files or decoding EXIF."""
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row.get("asset_pair_id") or row["path"], []).append(row)
+    assets: list[AssetPair] = []
+    raw_exts = {extension.casefold() for extension in RAW_EXTS}
+    for asset_id, members in grouped.items():
+        raw: Path | None = None
+        jpeg: Path | None = None
+        for row in members:
+            path = Path(row["path"])
+            role = row.get("asset_role")
+            if role == "jpeg" or path.suffix.casefold() in JPEG_EXTS:
+                jpeg = path
+            elif role == "raw" or path.suffix.casefold() in raw_exts:
+                raw = path
+            elif raw is None:
+                raw = path
+        preview = jpeg or raw
+        if preview is None:
+            continue
+        assets.append(
+            AssetPair(asset_id, preview.parent, preview.stem, raw, jpeg, preview)
+        )
+    return sorted(assets, key=lambda item: item.asset_id)

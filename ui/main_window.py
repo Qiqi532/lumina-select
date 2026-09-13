@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from engine import config
 from engine.store import PhotoStore
 from .pages.analyze_page import AnalyzePage
+from .pages.export_page import ExportPage
 from .pages.import_page import ImportPage
 from .pages.review_page import ReviewPage
 
@@ -67,7 +68,7 @@ class MainWindow(QMainWindow):
         self.import_page = ImportPage()
         self.analyze_page = AnalyzePage()
         self.review_page = ReviewPage(self.store)
-        self.export_page = self._placeholder("导出到 Lightroom", "交付页面将在下一阶段接入。")
+        self.export_page = ExportPage(self.store)
         self.pages = {
             "import": self.import_page,
             "analyze": self.analyze_page,
@@ -110,6 +111,8 @@ class MainWindow(QMainWindow):
         self.current_stage_name = name
         if name == "review":
             self.review_page.reload()
+        elif name == "export":
+            self.export_page.reload()
         self.stack.setCurrentWidget(self.pages[name])
         current_index = list(self.pages).index(name)
         for index, button in enumerate(self.stage_buttons):
@@ -146,6 +149,10 @@ class MainWindow(QMainWindow):
                 self.show_error("分析仍在安全取消中，请稍后再退出")
                 event.ignore()
                 return
+        if not self.export_page.shutdown():
+            self.show_error("导出仍在完成当前文件，请稍后再退出")
+            event.ignore()
+            return
         self.review_page.shutdown()
         self.store.close()
         super().closeEvent(event)

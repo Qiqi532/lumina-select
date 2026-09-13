@@ -340,6 +340,21 @@ class PhotoStore:
                 (path, target_path, xmp_path, status, error, time.time()),
             )
 
+    def failed_export_items(self, target_dir: str | None = None) -> list[dict]:
+        """Return failed rows, optionally limited to one delivery directory."""
+        from pathlib import Path
+
+        requested = Path(target_dir).resolve(strict=False) if target_dir else None
+        rows = self.conn.execute(
+            "SELECT * FROM export_items WHERE status='failed' ORDER BY updated_at, path"
+        ).fetchall()
+        return [
+            self._row_to_dict(row)
+            for row in rows
+            if requested is None
+            or Path(row["target_path"]).resolve(strict=False).parent == requested
+        ]
+
     # ------------------------------------------------------------------
     # 相似组
     # ------------------------------------------------------------------

@@ -21,8 +21,12 @@
 #define MyAppPublisher "Lumina Select / 光影选片助手"
 #define MyAppURL "https://github.com/Qiqi532/lumina-select"
 ; 自包含 onedir 产物目录（相对本 .iss 文件）
-#define MySourceDir "dist\光影选片助手"
-#define MyOutputDir "Output"
+#ifndef MySourceDir
+  #define MySourceDir "dist\光影选片助手"
+#endif
+#ifndef MyOutputDir
+  #define MyOutputDir "Output"
+#endif
 
 [Setup]
 ; 基本信息

@@ -8,8 +8,12 @@
 #define MyAppVersion "0.5.0"
 #define MyAppPublisher "Lumina Select / 光影选片助手"
 #define MyAppURL "https://github.com/Qiqi532/lumina-select"
-#define MySourceDir "dist_light\光影选片助手"
-#define MyOutputDir "Output_light"
+#ifndef MySourceDir
+  #define MySourceDir "dist_light\光影选片助手"
+#endif
+#ifndef MyOutputDir
+  #define MyOutputDir "Output_light"
+#endif
 
 [Setup]
 AppId=LuminaSelect.Lightweight

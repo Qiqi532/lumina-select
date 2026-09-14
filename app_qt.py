@@ -49,7 +49,7 @@ def main() -> int:
                 report = run_smoke_payload(Path(directory))
             report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
             return 0 if all(report[key] for key in (
-                "frozen", "started", "analyzed", "exported", "source_unchanged", "delivery_exists"
+                "frozen", "started", "analyzed", "face_detection_available", "exported", "source_unchanged", "delivery_exists"
             )) else 1
         except Exception as error:
             report_path.write_text(json.dumps({

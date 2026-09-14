@@ -8,6 +8,10 @@ _detect_landmarks() 单例结果并自行计算 EAR。因此单测改在更底�
 """
 from __future__ import annotations
 
+import builtins
+import os
+import sys
+
 import numpy as np
 from PIL import Image
 
@@ -23,6 +27,43 @@ def test_mediapipe_junction_path_is_environment_specific():
     assert lightweight.isascii()
 
 
+def test_frozen_face_mesh_resource_root_uses_ascii_junction(monkeypatch):
+    from mediapipe.python import solution_base
+
+    link = r"D:\photocull_mp_test"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(solution_base, "__file__", r"D:\中文\_internal\mediapipe\python\solution_base.py")
+    expected_model = os.path.join(
+        link, "mediapipe", "modules", "face_landmark", "face_landmark_front_cpu.binarypb",
+    )
+    monkeypatch.setattr(faces.os.path, "isfile", lambda path: path == expected_model)
+
+    faces._redirect_frozen_resource_root(link)
+
+    assert solution_base.__file__ == os.path.join(link, "mediapipe", "python", "solution_base.py")
+
+
+def test_failed_mediapipe_import_is_reported_once_and_not_retried(monkeypatch, caplog):
+    monkeypatch.setattr(faces, "_MEDIAPIPE_READY", False)
+    monkeypatch.setattr(faces, "_MEDIAPIPE_FAILED", False, raising=False)
+    monkeypatch.setattr(faces, "_find_mediapipe_site_packages", lambda: [])
+    original_import = builtins.__import__
+    attempts = []
+
+    def fail_mediapipe(name, *args, **kwargs):
+        if name == "mediapipe":
+            attempts.append(name)
+            raise ImportError("missing bundled dependency")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_mediapipe)
+
+    assert faces._ensure_mediapipe() is False
+    assert faces._ensure_mediapipe() is False
+    assert attempts == ["mediapipe"]
+    assert "missing bundled dependency" in caplog.text
+
+
 def _rgb():
     return np.zeros((32, 32, 3), dtype=np.uint8)
 
@@ -33,6 +74,7 @@ def _pil():
 
 def _patch(monkeypatch, ear_value):
     """注入受控的融合管线输入：强制 mediapipe 可用、返回单张脸、EAR 可控。"""
+    monkeypatch.setattr(faces.config, "INFERENCE_BACKEND", "torch")
     monkeypatch.setattr(faces, "_ensure_mediapipe", lambda: True)
     # 单张脸（478 个伪关键点）；_ear 已被打桩，坐标无所谓
     monkeypatch.setattr(faces, "_detect_landmarks",
@@ -87,6 +129,21 @@ def test_boundary_interval_classifier_low_conf(monkeypatch):
     assert r["eyes_closed"] is False
 
 
+def test_heuristic_backend_skips_vit_classifier(monkeypatch):
+    _patch(monkeypatch, 0.25)
+    monkeypatch.setattr(faces.config, "INFERENCE_BACKEND", "heuristic")
+    calls = []
+    monkeypatch.setattr(
+        faces, "eye_close_probability", lambda *_args: calls.append(True) or 0.9,
+    )
+
+    result = faces.detect_face_and_eyes(_rgb(), pil_img=_pil())
+
+    assert calls == []
+    assert result["eye_close_prob"] is None
+    assert result["eyes_closed"] is False
+
+
 def test_no_face_neutral():
     """无脸时不判闭眼，eye_close_prob 为 None。"""
     r = faces.detect_face_and_eyes(_rgb())
@@ -97,6 +154,7 @@ def test_no_face_neutral():
 
 
 def test_all_face_regions_include_bbox_eye_state_and_local_sharpness(monkeypatch):
+    monkeypatch.setattr(faces.config, "INFERENCE_BACKEND", "torch")
     monkeypatch.setattr(faces, "_ensure_mediapipe", lambda: True)
     first = [(0.10, 0.20), (0.30, 0.50)] + [(0.20, 0.35)] * 476
     second = [(0.60, 0.10), (0.85, 0.45)] + [(0.72, 0.25)] * 476

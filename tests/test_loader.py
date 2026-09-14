@@ -72,3 +72,23 @@ def test_review_preview_uses_paired_jpeg_without_opening_raw(tmp_path, monkeypat
     )
 
     assert image.size == (10, 8)
+
+
+def test_raw_metadata_uses_sensor_dimensions_not_embedded_thumbnail(tmp_path, monkeypatch):
+    raw_path = tmp_path / "IMG_0001.NEF"
+    Image.new("RGB", (160, 120)).save(raw_path, format="JPEG")
+
+    class RawWithSizes:
+        sizes = SimpleNamespace(width=6040, height=4032)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(loader.rawpy, "imread", lambda _path: RawWithSizes())
+
+    metadata = loader.read_exif(str(raw_path))
+
+    assert (metadata["width"], metadata["height"]) == (6040, 4032)

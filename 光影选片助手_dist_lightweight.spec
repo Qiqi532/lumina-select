@@ -65,7 +65,8 @@ a = Analysis(
         'transformers', 'huggingface_hub', 'safetensors',
         'pyiqa', 'timm',
         # 与标准版一致的瘦身排除项
-        'sklearn', 'matplotlib', 'tensorboard', 'wandb',
+        # MediaPipe solutions/__init__.py 实际导入 drawing_utils -> matplotlib.pyplot。
+        'sklearn', 'tensorboard', 'wandb',
         'tensorflow', 'keras', 'panel', 'bokeh', 'holoviews', 'datashader',
         'botocore', 'boto3', 's3transfer', 'jmespath',
         'bitsandbytes', 'pyarrow', 'numba', 'llvmlite',

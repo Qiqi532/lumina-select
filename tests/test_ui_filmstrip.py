@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from threading import Event
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtGui import QImage, QPainter, QPixmap
+from PyQt6.QtWidgets import QStyleOptionViewItem
 
 from services.review_service import ReviewFilter, ReviewItem
-from ui.review.filmstrip import FilmstripModel, FilmstripView
+from ui.review.filmstrip import FilmstripDelegate, FilmstripModel, FilmstripView
 from ui.review.filters import FilterSidebar
 
 
@@ -40,6 +41,20 @@ def test_thousand_rows_use_delegate_without_index_widgets(qtbot):
     assert all(view.indexWidget(model.index(row)) is None for row in (0, 20, 500, 999))
     assert view.itemDelegate() is not None
     model.close()
+
+
+def test_filmstrip_delegate_paints_filename_and_badges_without_qt_error(qtbot):
+    model = FilmstripModel(_items(1), thumbnail_loader=lambda _path: QImage())
+    image = QImage(156, 106, QImage.Format.Format_RGB32)
+    image.fill(0xFF111315)
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 156, 106)
+    painter = QPainter(image)
+    try:
+        FilmstripDelegate().paint(painter, option, model.index(0))
+    finally:
+        painter.end()
+        model.close()
 
 
 def test_roles_and_lazy_thumbnail_request(qtbot):

@@ -85,8 +85,8 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=['dist_runtime_hook.py'],  # 打包前重定向 HF/TORCH 缓存目录
     excludes=[
-        # 这些包未被任何源码导入，排除以减小体积
-        'pyiqa', 'timm', 'sklearn', 'matplotlib', 'tensorboard', 'wandb',
+        # MediaPipe solutions/__init__.py 实际导入 drawing_utils -> matplotlib.pyplot。
+        'pyiqa', 'timm', 'sklearn', 'tensorboard', 'wandb',
         'torchaudio',
         # 环境中同时存在 PyQt5（conda 自带，mediapipe 间接依赖）与 PyQt6，
         # PyInstaller 禁止同时打包两个 Qt 绑定 —— 本应用只用 PyQt6

@@ -68,13 +68,36 @@ def test_empty_dir(tmp_path):
     assert "没有找到" in r["message"]
 
 
-def test_phase_timing_present(full_data_dir, tmp_db_path):
+def test_phase_timing_present(full_data_dir, tmp_db_path, caplog):
     """返回分阶段耗时（供 benchmark 使用）。"""
     r = _run(full_data_dir, tmp_db_path)
     assert set(r["phase_timing"]) >= {"扫描", "读取元数据", "质量与哈希", "美学与场景",
                                       "相似聚类", "评分与甄选"}
     for v in r["phase_timing"].values():
         assert isinstance(v, float)
+    assert "阶段耗时" in caplog.text
+    assert "质量分块" in caplog.text
+
+
+def test_stage1_uses_embedded_preview_instead_of_demosaicing_raw(monkeypatch):
+    from engine import loader, pipeline
+
+    requests = []
+
+    def preview(path, *, max_size):
+        requests.append((path, max_size))
+        return Image.new("RGB", (64, 48), color=(100, 130, 160))
+
+    monkeypatch.setattr(loader, "load_review_preview", preview)
+    monkeypatch.setattr(
+        loader, "load_image",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("RAW demosaic must not run")),
+    )
+
+    result = pipeline._stage1_worker("C:/photos/IMG_0001.NEF")
+
+    assert result["ok"] is True
+    assert requests == [("C:/photos/IMG_0001.NEF", pipeline.ANALYZE_SIZE)]
 
 
 def test_asset_pairing_metadata_is_persistable(tmp_path):

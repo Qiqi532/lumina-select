@@ -62,6 +62,7 @@ EYE_MODEL_EAR_LO = config.EYE_MODEL_EAR_LO
 EYE_MODEL_EAR_HI = config.EYE_MODEL_EAR_HI
 
 _MEDIAPIPE_READY = False
+_MEDIAPIPE_FAILED = False
 
 
 def _is_ascii(s: str) -> bool:
@@ -110,6 +111,21 @@ def _find_mediapipe_site_packages() -> list[str]:
     return candidates
 
 
+def _redirect_frozen_resource_root(link: str | None) -> None:
+    """Point FaceMesh's native model lookup at the ASCII alias in frozen builds."""
+    if not link or not getattr(sys, "frozen", False):
+        return
+    from mediapipe.python import solution_base
+
+    if _is_ascii(solution_base.__file__):
+        return
+    model = os.path.join(
+        link, "mediapipe", "modules", "face_landmark", "face_landmark_front_cpu.binarypb",
+    )
+    if os.path.isfile(model):
+        solution_base.__file__ = os.path.join(link, "mediapipe", "python", "solution_base.py")
+
+
 def _ensure_mediapipe():
     """确保 mediapipe 在【首次 import 前】从 ASCII 路径加载。
 
@@ -120,11 +136,14 @@ def _ensure_mediapipe():
          不会随重导重置（会报 generic_type already registered）。
     做法：在首次 import mediapipe 前，把 ASCII junction 路径插入 sys.path[0]。
     """
-    global _MEDIAPIPE_READY, _face_mesh
+    global _MEDIAPIPE_READY, _MEDIAPIPE_FAILED, _face_mesh
     if _MEDIAPIPE_READY:
         return True
+    if _MEDIAPIPE_FAILED:
+        return False
     try:
         # 首次 import 之前完成路径准备
+        link = None
         for sp in _find_mediapipe_site_packages():
             mp_dir = os.path.join(sp, "mediapipe")
             if _is_ascii(mp_dir):
@@ -137,11 +156,21 @@ def _ensure_mediapipe():
             break
         import mediapipe  # noqa: F401
         from mediapipe.python.solutions import face_mesh
+        _redirect_frozen_resource_root(link)
         _face_mesh = face_mesh
         _MEDIAPIPE_READY = True
         return True
-    except Exception:
+    except Exception as error:
         _MEDIAPIPE_READY = False
+        _MEDIAPIPE_FAILED = True
+        package = sys.modules.get("mediapipe")
+        bindings = sys.modules.get("mediapipe.python._framework_bindings")
+        _log.warning(
+            "MediaPipe 初始化失败：%s: %s（package=%s, bindings=%s, runtime=%s）",
+            type(error).__name__, error,
+            getattr(package, "__file__", None), getattr(bindings, "__file__", None),
+            getattr(sys, "_MEIPASS", None),
+        )
         return False
 
 
@@ -344,6 +373,8 @@ def detect_face_and_eyes(rgb: np.ndarray, pil_img=None,
     result["eyes_closed"] = (result["ear"] is not None and result["ear"] < ear_threshold)
     if result["eyes_closed"]:
         return result                       # EAR 已判闭眼 → 无需分类器
+    if config.INFERENCE_BACKEND == "heuristic":
+        return result                       # 轻量版只用本地 EAR，不加载 ViT
 
     ear = result["ear"]
     if ear is None or not (EYE_MODEL_EAR_LO <= ear <= EYE_MODEL_EAR_HI):

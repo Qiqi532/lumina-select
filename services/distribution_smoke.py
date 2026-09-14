@@ -11,6 +11,7 @@ from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
 from engine import config, inference
+from engine.faces import detect_face_ear
 from engine.pipeline import analyze_directory
 from engine.store import PhotoStore
 from services.asset_pairing import assets_from_rows
@@ -37,6 +38,7 @@ def run_smoke_payload(root: Path, *, backend: str | None = None) -> dict:
     source = source_dir / "smoke.jpg"
     pixels = np.indices((128, 128)).sum(axis=0).astype(np.uint8)
     Image.fromarray(np.stack((pixels, np.roll(pixels, 17, 0), np.roll(pixels, 31, 1)), axis=2)).save(source)
+    face_result = detect_face_ear(np.asarray(Image.open(source).convert("RGB")))
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     with ThreadPoolExecutor(max_workers=1) as pool:
         analyzed = pool.submit(analyze_directory, str(source_dir), str(db_path), use_faces=False).result()
@@ -69,6 +71,8 @@ def run_smoke_payload(root: Path, *, backend: str | None = None) -> dict:
         "backend": config.INFERENCE_BACKEND,
         "started": started,
         "analyzed": analyzed["new_analyzed"],
+        "face_detection_available": face_result["error"] is None,
+        "face_detection_error": face_result["error"],
         "exported": sum(item.status == "success" for item in results),
         "export_results": [item.status for item in results],
         "export_errors": [

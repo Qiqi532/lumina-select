@@ -24,6 +24,23 @@ def _app_dir() -> str:
 
 _app = _app_dir()
 
+# PyInstaller 的自动 PyQt6 运行钩子会先导入 QtCore；此后再加载 MediaPipe
+# 的 _framework_bindings 会在 Windows 上以 DLL 初始化错误失败。自定义钩子
+# 排在自动钩子前，先装载扩展，随后 faces.py 才导入 Python 侧 API。
+if getattr(sys, "frozen", False) and sys.platform == "win32":
+    import ctypes
+    from pathlib import Path
+
+    _mp_native_dir = Path(sys._MEIPASS) / "mediapipe" / "python"
+    _mp_extensions = list(_mp_native_dir.glob("_framework_bindings*.pyd"))
+    if len(_mp_extensions) == 1:
+        _mp_dll_directory = os.add_dll_directory(str(_mp_native_dir))
+        try:
+            _mp_native = ctypes.WinDLL(str(_mp_extensions[0]))
+        except OSError:
+            _mp_dll_directory.close()
+            # 保留无脸中性值退化路径；faces.py 会记录可诊断的初始化错误。
+
 # 关键：强制轻量推理后端（在 engine 任何模块 import 之前设置，确保生效）
 os.environ["LUMINA_INFERENCE_BACKEND"] = "heuristic"
 

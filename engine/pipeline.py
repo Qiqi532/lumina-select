@@ -113,7 +113,7 @@ def _stage1_worker(path: str) -> dict:
     """
     started_at = time.perf_counter()
     try:
-        pil = loader.load_image(path, max_size=ANALYZE_SIZE)
+        pil = loader.load_review_preview(path, max_size=ANALYZE_SIZE)
         if pil is None:
             return {"ok": False, "path": path}
         rgb = np.asarray(pil, dtype=np.uint8)
@@ -173,10 +173,12 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
             break
         chunk_idxs = idxs[start:start + CHUNK]
         chunk_metas = [metas[i] for i in chunk_idxs]
+        chunk_started = time.perf_counter()
 
         # --- a) 线程池解码 + 质量 + pHash（纯 CPU，GIL 可释放）---
         with ThreadPoolExecutor(max_workers=QUALITY_WORKERS) as ex:
             raw = list(ex.map(_stage1_worker, [m.get("preview_path", m["path"]) for m in chunk_metas]))
+        decoded_at = time.perf_counter()
 
         # --- b) 画质模型批量 GPU 推理（一次前向算完整个块）---
         valid_pos = [k for k, r in enumerate(raw) if r.get("ok")]
@@ -187,9 +189,11 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
                 qscores = dict(zip(valid_pos, vals))
             except Exception as e:
                 _log.warning("画质模型批量推理失败，本块退化为纯拉普拉斯：%s", e)
+        quality_at = time.perf_counter()
 
         # --- c) 人脸/闭眼（MediaPipe 单例，串行安全）+ 汇总 ---
         results = []
+        face_error_logged = False
         for k, r in enumerate(raw):
             if not r.get("ok"):
                 results.append({"ok": False})
@@ -197,14 +201,21 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
             face = {"is_face": False, "ear": None, "eyes_closed": False,
                     "eye_close_prob": None, "regions": []}
             if use_faces and _faces is not None:
+                face_started = time.perf_counter()
                 try:
                     fr = _faces.detect_face_and_eyes(r["rgb"], r["pil"])
+                    if fr.get("error") and not face_error_logged:
+                        _log.warning("人脸检测不可用（分块 %s）：%s", start // CHUNK + 1, fr["error"])
+                        face_error_logged = True
                     face = {"is_face": fr["is_face"], "ear": fr["ear"],
                             "eyes_closed": fr["eyes_closed"],
                             "eye_close_prob": fr["eye_close_prob"],
                             "regions": fr.get("regions", [])}
                 except Exception as e:
                     _log.warning("人脸检测异常 %s: %s", r["path"], e)
+                face_elapsed = time.perf_counter() - face_started
+                if face_elapsed > 2.0:
+                    _log.warning("人脸检测慢（分块 %s，第 %s 张）：%.2fs", start // CHUNK + 1, k + 1, face_elapsed)
             results.append({
                 "ok": True,
                 "blur_score": r["q"]["blur_score"],
@@ -217,9 +228,17 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
                 "analysis_ms": r.get("analysis_ms", 0.0),
                 "phash": r["phash"],
             })
+        faces_at = time.perf_counter()
 
         # --- d) 批量落库（断点续跑：已完成部分立即持久化）---
         _write_stage1_batch(store, chunk_metas, results)
+        written_at = time.perf_counter()
+        _log.info(
+            "质量分块 %s-%s/%s：解码=%.2fs，画质=%.2fs，人脸=%.2fs，入库=%.2fs",
+            start + 1, start + len(chunk_idxs), total,
+            decoded_at - chunk_started, quality_at - decoded_at,
+            faces_at - quality_at, written_at - faces_at,
+        )
         for i, s in zip(chunk_idxs, results):
             stage1[i] = s
         done += len(chunk_idxs)
@@ -618,6 +637,10 @@ def analyze_directory(root: str, db_path: str,
         store.set_meta("ai_models", _ai_model_signature())
         st = store.stats()
         _log.info("分析完成：%s 张，新增 %s，耗时 %.1fs", n, n_new, time.time() - t_start)
+        _log.info(
+            "阶段耗时：%s",
+            ", ".join(f"{name}={elapsed:.2f}s" for name, elapsed in phase_t.items()),
+        )
         return {
             "total": n,
             "new_analyzed": n_new,

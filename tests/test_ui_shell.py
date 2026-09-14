@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
-from ui.pages.analyze_page import AnalyzePage
+from ui.pages.analyze_page import AnalyzePage, AnalyzeWorker
 from ui.pages.import_page import ImportPage
 from ui.theme import COLORS, SPACING, stylesheet
 
@@ -47,6 +47,23 @@ def test_import_analyze_switch_keeps_project_store(qtbot, tmp_path):
     window.goto("import")
     assert isinstance(window.current_page, ImportPage)
     assert window.store.get_meta("fixture") == "retained"
+
+
+def test_analyze_worker_includes_raw_assets(monkeypatch):
+    from engine import pipeline
+
+    calls = []
+
+    def fake_analyze(source, db_path, **kwargs):
+        calls.append((source, db_path, kwargs))
+        return {"total": 1}
+
+    monkeypatch.setattr(pipeline, "analyze_directory", fake_analyze)
+    worker = AnalyzeWorker("C:/photos", "C:/project.db")
+    worker.run()
+
+    assert len(calls) == 1
+    assert calls[0][2]["include_raw"] is True
 
 
 def test_primary_button_size_hint_fits_text_at_150_percent(qtbot, tmp_path):

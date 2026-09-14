@@ -27,6 +27,22 @@ def _app_dir() -> str:
 
 _app = _app_dir()
 
+# 自定义钩子先于 PyInstaller 的 PyQt6 钩子执行。QtCore 若先加载，Windows
+# 上 MediaPipe 的 _framework_bindings 会报 DLL 初始化失败；先装载该扩展。
+if getattr(sys, "frozen", False) and sys.platform == "win32":
+    import ctypes
+    from pathlib import Path
+
+    _mp_native_dir = Path(sys._MEIPASS) / "mediapipe" / "python"
+    _mp_extensions = list(_mp_native_dir.glob("_framework_bindings*.pyd"))
+    if len(_mp_extensions) == 1:
+        _mp_dll_directory = os.add_dll_directory(str(_mp_native_dir))
+        try:
+            _mp_native = ctypes.WinDLL(str(_mp_extensions[0]))
+        except OSError:
+            _mp_dll_directory.close()
+            # faces.py 后续记录具体错误并使用中性人脸值。
+
 # 仅在用户/系统未显式设置时才写入，允许用户用系统环境变量覆盖。
 os.environ.setdefault("HF_HOME", os.path.join(_app, ".hf_cache"))
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(_app, ".hf_cache", "hub"))

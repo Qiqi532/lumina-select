@@ -60,6 +60,7 @@ def test_smoke_payload_starts_analyzes_and_exports(tmp_path, monkeypatch):
     report = run_smoke_payload(tmp_path, backend="heuristic")
     assert report["started"]
     assert report["analyzed"] == 1
+    assert report["face_detection_available"]
     assert report["exported"] == 1
     assert report["source_unchanged"]
 

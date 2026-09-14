@@ -161,6 +161,13 @@ def read_exif(path: str) -> dict:
                 info["iso"] = int(round(iso)) if iso is not None else None
     except Exception:
         pass
+    if os.path.splitext(path)[1].lower() in RAW_EXTS and _HAS_RAWPY:
+        try:
+            with rawpy.imread(path) as raw:
+                info["width"] = raw.sizes.width
+                info["height"] = raw.sizes.height
+        except Exception as error:
+            _log.warning("RAW 尺寸读取失败 %s: %s", path, error)
     if info["ts"] is None:
         try:
             info["ts"] = os.path.getmtime(path) * 1000.0

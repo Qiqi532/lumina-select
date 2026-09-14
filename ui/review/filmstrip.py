@@ -217,7 +217,8 @@ class FilmstripDelegate(QStyledItemDelegate):
                 scaled,
             )
         painter.setPen(QColor(COLORS["text"]))
-        painter.drawText(option.rect.adjusted(8, 70, -8, -18), str(index.data()))
+        text_flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        painter.drawText(option.rect.adjusted(8, 70, -8, -18), text_flags, str(index.data()))
         flags = []
         if index.data(FilmstripModel.RecommendedRole):
             flags.append("AI")
@@ -228,7 +229,10 @@ class FilmstripDelegate(QStyledItemDelegate):
             flags.append(candidate)
         star = index.data(FilmstripModel.StarRole)
         painter.setPen(QColor(COLORS["accent"] if flags else COLORS["muted"]))
-        painter.drawText(option.rect.adjusted(8, 86, -8, -4), f"{' '.join(flags)}  {star}★")
+        painter.drawText(
+            option.rect.adjusted(8, 86, -8, -4), text_flags,
+            f"{' '.join(flags)}  {star}★",
+        )
         painter.restore()
 
 

@@ -40,6 +40,7 @@ class AnalyzeWorker(QThread):
             result = analyze_directory(
                 self.source,
                 self.db_path,
+                include_raw=True,
                 use_faces=True,
                 progress_cb=lambda phase, done, total: self.progress.emit(phase, done, total),
                 cancel_check=lambda: self._cancel_requested or self.isInterruptionRequested(),

@@ -51,6 +51,26 @@ def test_staged_exiftool_writes_delivery_jpeg(tmp_path):
     assert target.is_file()
 
 
+def test_staged_exiftool_writes_jpeg_in_chinese_delivery_path(tmp_path):
+    executable = Path(__file__).resolve().parents[1] / "release/exiftool/exiftool.exe"
+    config = executable.parent.parent / "exiftool-lumina.config"
+    if not executable.is_file():
+        pytest.skip("locked ExifTool runtime not staged")
+    delivery = tmp_path / "中文交付"
+    delivery.mkdir()
+    target = delivery / "精选照片.jpg"
+    Image.new("RGB", (32, 32), "green").save(target)
+
+    result = MetadataWriter(executable, delivery, config_path=config).write(
+        target,
+        XmpSelection(5, "Green", ("旅行",), "0.5.0", "heuristic", ()),
+    )
+
+    assert result.success, result
+    assert target.is_file()
+    assert not list(delivery.glob(".lumina-*"))
+
+
 def test_smoke_payload_starts_analyzes_and_exports(tmp_path, monkeypatch):
     from engine import config
 

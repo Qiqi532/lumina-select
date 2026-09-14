@@ -36,7 +36,7 @@ class FakeRunner:
     def __call__(self, args, **kwargs):
         self.calls.append((args, kwargs))
         if "-@" in args:
-            args_path = Path(args[args.index("-@") + 1])
+            args_path = Path(kwargs["cwd"]) / args[args.index("-@") + 1]
             self.args_file_text = args_path.read_text(encoding="utf-8")
         if self.timeout:
             raise subprocess.TimeoutExpired(args, kwargs["timeout"])
@@ -63,9 +63,13 @@ def test_writes_internal_xmp_only_to_delivery_copy(tmp_path, suffix):
     assert write_args[0].endswith("exiftool.exe")
     assert "-charset" in write_args and "filename=utf8" in write_args
     assert "-@" in write_args
-    args_file = Path(write_args[write_args.index("-@") + 1])
+    args_file = Path(write_kwargs["cwd"]) / write_args[write_args.index("-@") + 1]
+    assert args_file.name.isascii()
+    assert write_kwargs["cwd"] == delivery.resolve()
     assert "交付目录" in str(target)
-    assert "照片一号" in runner.args_file_text
+    assert "照片一号" not in runner.args_file_text
+    assert runner.args_file_text.splitlines()[-1].isascii()
+    assert "旅行" in runner.args_file_text
     assert "-XMP-xmp:Rating=4" in runner.args_file_text
     assert write_kwargs["shell"] is False
     assert write_kwargs["timeout"] == 30
@@ -126,7 +130,7 @@ def test_failures_preserve_existing_delivery_copy(tmp_path, runner, error_code):
     assert result.success is False
     assert result.error_code == error_code
     assert target.read_bytes() == original
-    assert not list(delivery.glob("*.lumina-meta-part"))
+    assert not list(delivery.glob(".lumina-meta-*"))
 
 
 def test_rejects_file_outside_delivery_root(tmp_path):

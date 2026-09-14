@@ -48,9 +48,10 @@ class MetadataWriter:
         args.extend(["-charset", "filename=utf8"])
         return args
 
-    def _run(self, args: list[str]):
+    def _run(self, args: list[str], *, cwd: Path):
         return self.runner(
             args,
+            cwd=cwd,
             shell=False,
             timeout=self.timeout,
             creationflags=CREATE_NO_WINDOW,
@@ -127,28 +128,36 @@ class MetadataWriter:
         if not target.is_file():
             return MetadataWriteResult(target, False, "target_missing", "delivery copy is missing")
 
-        temporary_path = target.with_name(f".{target.name}.lumina-meta-part")
+        temporary_path: Path | None = None
         args_path: Path | None = None
         try:
+            descriptor, name = tempfile.mkstemp(
+                prefix=".lumina-meta-", suffix=target.suffix, dir=target.parent
+            )
+            os.close(descriptor)
+            temporary_path = Path(name)
             shutil.copy2(target, temporary_path)
             descriptor, name = tempfile.mkstemp(
                 prefix=".lumina-exiftool-", suffix=".args", dir=target.parent
             )
             args_path = Path(name)
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-                for argument in self._write_args(temporary_path, selection):
+                for argument in self._write_args(Path(temporary_path.name), selection):
                     handle.write(argument)
                     handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
 
-            write_result = self._run([*self._base_args(), "-@", str(args_path)])
+            write_result = self._run(
+                [*self._base_args(), "-@", args_path.name], cwd=target.parent.resolve()
+            )
             if write_result.returncode != 0:
                 return MetadataWriteResult(
                     target, False, "exiftool_failed", write_result.stderr.strip() or "ExifTool failed"
                 )
             read_result = self._run(
-                [*self._base_args(), "-j", "-XMP:all", str(temporary_path)]
+                [*self._base_args(), "-j", "-XMP:all", temporary_path.name],
+                cwd=target.parent.resolve(),
             )
             if read_result.returncode != 0:
                 return MetadataWriteResult(
@@ -175,6 +184,7 @@ class MetadataWriter:
         except OSError as error:
             return MetadataWriteResult(target, False, "unknown", str(error))
         finally:
-            temporary_path.unlink(missing_ok=True)
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
             if args_path is not None:
                 args_path.unlink(missing_ok=True)

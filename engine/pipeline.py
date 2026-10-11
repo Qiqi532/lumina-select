@@ -41,6 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from . import config, loader, quality, similarity, scorer
+from . import degradations as degradation_events
 from . import inference
 from .log import get_logger
 from .store import PhotoStore
@@ -60,6 +61,13 @@ QUALITY_WORKERS = config.QUALITY_WORKERS  # 质量检测线程池并行数
 # 分块大小：内存与"取消响应速度"的共同旋钮。块越大 GPU 利用率越高，
 # 但内存占用与取消延迟同步上升。经验值 = 线程数 × 4。
 CHUNK = max(QUALITY_WORKERS * 4, 8)
+
+# 阶段一负责写入的度量列。解码失败时用它们把库中已有值原样带回去，
+# 避免"临时读取失败"把上一轮算好的指标抹成 NULL（见 _write_stage1_batch）。
+_STAGE1_METRIC_FIELDS = (
+    "blur_score", "over_ratio", "under_ratio", "brisque",
+    "is_face", "eye_open", "eye_close_prob", "phash",
+)
 
 
 def _apply_asset_pairing(meta: list[dict]) -> None:
@@ -84,10 +92,15 @@ def _same_asset(left: dict, right: dict) -> bool:
     return bool(left_id and left_id == right.get("asset_pair_id"))
 
 
-def _ai_model_signature() -> str:
-    """AI 模型签名（美学 + 画质 + 闭眼）。任一模型升级 → 签名变化 → 全量重算。"""
-    aes = inference.aesthetic_model_name()
-    q = inference.quality_model_name()
+def _ai_model_signature(backend) -> str:
+    """AI 模型签名（美学 + 画质 + 闭眼）。任一模型升级 → 签名变化 → 全量重算。
+
+    【v0.6 S2-1】backend 显式传入：签名必须反映"本次实际使用的后端"，
+    而不是某个进程级全局状态（旧实现读 config.INFERENCE_BACKEND，
+    导致同一进程里先后两次分析可能拿到不同后端却算作同一签名）。
+    """
+    aes = backend.aesthetic_model_name()
+    q = backend.quality_model_name()
     eye = _faces.eye_model_name() if _faces is not None else "none"
     return f"aes={aes}|q={q}|eye={eye}"
 
@@ -126,11 +139,12 @@ def _stage1_worker(path: str) -> dict:
         return {"ok": False, "path": path}
 
 
-def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict]):
+def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict],
+                        backend) -> None:
     """批量写入阶段一结果（单事务；断点续跑的最小落库单元）。"""
     rows = []
-    backend_name = inference.get_backend().name
-    quality_model = inference.quality_model_name()
+    backend_name = backend.name
+    quality_model = backend.quality_model_name()
     for m, s1 in zip(metas, results):
         base = {"path": m["path"], "fname": m["fname"], "ts": m["ts"], "mtime": m["mtime"],
                 "width": m["width"], "height": m["height"],
@@ -141,8 +155,17 @@ def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict
                 "analysis_backend": backend_name, "quality_model": quality_model,
                 "analysis_ms": s1.get("analysis_ms")}
         if not s1.get("ok"):
-            # 解码失败的照片也记录 mtime，避免每次重试（仍是 NULL 指标，重算可覆盖）
-            rows.append(base)
+            # 解码失败：记录 mtime / 分析标识（避免每次都重试），但【不】把上一轮
+            # 算好的度量覆盖成 NULL —— 前提是文件本身没变（mtime 一致）。
+            # 文件确实变了才保留 NULL，让下次重算，避免留下过期指标。
+            # 【P1-1】旧实现直接写 base 骨架行；配合 store 里"以 rows[0] 决定列
+            # 集合"的写法，同块其余照片的指标会被一并丢弃。
+            row = dict(base)
+            prev = store.get_photo(m["path"]) or {}
+            if prev and abs((prev.get("mtime") or 0) - (m["mtime"] or 0)) < 1e-6:
+                for field in _STAGE1_METRIC_FIELDS:
+                    row[field] = prev.get(field)
+            rows.append(row)
             continue
         rows.append({**base,
                      "blur_score": s1["blur_score"], "over_ratio": s1["over"],
@@ -157,7 +180,7 @@ def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict
 
 
 def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
-                use_faces: bool, progress_cb, cancel_check) -> tuple[dict, int]:
+                use_faces: bool, progress_cb, cancel_check, backend) -> tuple[dict, int]:
     """阶段一：分块流式处理，返回 (stage1 指标 dict, 已完成数)。
 
     分块是本项目内存与响应性的关键：
@@ -185,7 +208,7 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
         qscores: dict[int, float | None] = {}
         if valid_pos:
             try:
-                vals = inference.quality_scores([raw[k]["rgb"] for k in valid_pos])
+                vals = backend.quality_scores([raw[k]["rgb"] for k in valid_pos])
                 qscores = dict(zip(valid_pos, vals))
             except Exception as e:
                 _log.warning("画质模型批量推理失败，本块退化为纯拉普拉斯：%s", e)
@@ -231,7 +254,7 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
         faces_at = time.perf_counter()
 
         # --- d) 批量落库（断点续跑：已完成部分立即持久化）---
-        _write_stage1_batch(store, chunk_metas, results)
+        _write_stage1_batch(store, chunk_metas, results, backend)
         written_at = time.perf_counter()
         _log.info(
             "质量分块 %s-%s/%s：解码=%.2fs，画质=%.2fs，人脸=%.2fs，入库=%.2fs",
@@ -258,7 +281,8 @@ def analyze_directory(root: str, db_path: str,
                       burst_interval_ms: float | None = None,
                       phash_threshold: int | None = None,
                       score_gap: float | None = None,
-                      scene_conf_low: float | None = None) -> dict:
+                      scene_conf_low: float | None = None,
+                      backend: str | None = None) -> dict:
     """对目录执行完整分析并入库。
 
     参数：
@@ -275,12 +299,29 @@ def analyze_directory(root: str, db_path: str,
         phash_threshold 可选，pHash 距离阈值覆盖（默认 config）
         score_gap       可选，Top1-Top2 分差阈值覆盖（默认 config）
         scene_conf_low  可选，场景置信度阈值覆盖（默认 config）
+        backend         可选推理后端名（None → inference.DEFAULT_BACKEND，即 "torch"）
     返回：
         汇总 dict（total, new_analyzed, groups, wastes, bests, uncertain_groups,
         phase_timing 等）
     """
     t_start = time.time()
     phase_t = {}       # 分阶段耗时（秒），供 benchmark
+    # 【v0.6 S2-2】本次分析中发生过的降级（如"美学与场景后端不可用"）。
+    # 带着它一起返回，UI 才能把"少算了一半信号"如实告诉用户，而不是安静地给一份
+    # 看起来正常、实际缺项的结果。
+    # 【v0.6 S3-6】引擎深处的降级（GPU→CPU 回退、闭眼分类器不可用、美学头缺失）
+    # 通过 engine.degradations 上报。分析开始时先清掉上一轮残留，返回前再取走合并，
+    # 保证它只是「本轮事件日志」而不会变成跨轮状态。
+    degradation_events.drain()
+    degradations: list[dict] = []
+
+    def _all_degradations() -> list[dict]:
+        """本函数内记录的 + 引擎侧上报的降级事件（去重后合并）。"""
+        merged = list(degradations)
+        for entry in degradation_events.drain():
+            if entry not in merged:
+                merged.append(entry)
+        return merged
 
     def _phase_start(name):
         phase_t[name] = time.time()
@@ -295,7 +336,8 @@ def analyze_directory(root: str, db_path: str,
 
     def cancelled(phase: str, **extra) -> dict:
         payload = {"total": n, "message": "已取消", "cancelled": True,
-                   "new_analyzed": n_new, "phase_timing": phase_t}
+                   "new_analyzed": n_new, "phase_timing": phase_t,
+                   "degradations": _all_degradations()}
         payload.update(extra)
         _phase_end(phase)
         return payload
@@ -331,15 +373,31 @@ def analyze_directory(root: str, db_path: str,
     _phase_start("读取元数据")
     report("读取元数据", 0, n)
     with PhotoStore(db_path) as store:
+        # 【v0.6 S2-1】后端在这里才解析：它现在是显式参数，不是进程级配置。
+        # 放在早退路径（空目录）之后，保证"没有照片"时不会白白加载 torch 模型栈。
+        backend_impl = inference.get_backend(backend)
         prev_root = store.get_meta("source_root")
         if prev_root and prev_root != root_abs:
+            # 【P0-1】换分析源：先归档旧目录的人工复核，再清库；同时尝试恢复
+            # 本目录上次留下的决策骨架。旧实现只 clear_all()，用户切个目录再切
+            # 回来，标星/判废就永久消失，且没有任何提示。
+            archived = store.stash_decisions(f"decisions:{prev_root}")
             store.clear_all()
-        prev_sig = store.get_meta("ai_models")
-        cur_sig = _ai_model_signature()
-        if prev_sig and prev_sig != cur_sig:
-            store.clear_all()
-        elif prev_sig is None and store.count_photos() > 0:
-            store.clear_all()
+            restored = store.rehydrate_decisions(f"decisions:{root_abs}")
+            if archived or restored:
+                _log.info("换分析源：归档 %s 条人工决策，恢复 %s 条历史决策", archived, restored)
+        else:
+            prev_sig = store.get_meta("ai_models")
+            cur_sig = _ai_model_signature(backend_impl)
+            if (prev_sig and prev_sig != cur_sig) or (
+                prev_sig is None and store.count_photos() > 0
+            ):
+                # 【P0-1 修复】模型签名变化只清"模型派生度量"，保留人工决策。
+                # 旧实现调用 clear_all()，把 star / label / decision_source 连同
+                # 人工场景修正一起删掉——摄影师的复核结果被静默抹除。
+                # reset_metrics() 置空度量列后，下面的增量判断会自动重新纳入
+                # 阶段一与 CLIP，等价于"重算但不丢人工作业"。
+                store.reset_metrics()
         meta: list[dict] = []
         old_map = store.photos_map()
         need_stage1: list[int] = []
@@ -386,20 +444,27 @@ def analyze_directory(root: str, db_path: str,
             _phase_start("质量与哈希")
             report("质量与哈希", 0, n_new)
             stage1, done = _run_stage1(store, meta, need_stage1, use_faces,
-                                       progress_cb, cancel_check)
+                                       progress_cb, cancel_check, backend_impl)
             _phase_end("质量与哈希")
             if cancel_check and cancel_check():
                 return cancelled("质量与哈希", new_analyzed=done)
 
         # ---- 4) 阶段二：CLIP 批量（美学 + 场景，一次前向，GPU 优先）----
+        # 【v0.6 S2-2 / G3】阶段二不可用（典型：断网且本地无模型缓存）必须**降级**
+        # 而不是抛异常中断整次分析：阶段一的质量/哈希/人脸结果已经落库，用户仍应
+        # 拿到可用的甄选结果，只是这次没用上美学/场景信号，并被明确告知。
         _phase_start("美学与场景")
         order = sorted(need_clip)
         clip_res: dict[int, dict] = {}
+        stage2_error: str | None = None
         if order:
             report("美学与场景", 0, len(order))
             for b in range(0, len(order), CLIP_BATCH):
                 if cancel_check and cancel_check():
                     return cancelled("美学与场景")
+                if stage2_error is not None:
+                    # 后端已确认不可用：不再逐块重试（每块都要再等一次加载失败）
+                    break
                 batch_idx = order[b:b + CLIP_BATCH]
                 batch_imgs, valid = [], []
                 for i in batch_idx:
@@ -411,7 +476,22 @@ def analyze_directory(root: str, db_path: str,
                         batch_imgs.append(im)
                         valid.append(i)
                 if valid:
-                    res = inference.scene_and_aesthetics(batch_imgs)
+                    try:
+                        res = backend_impl.scene_and_aesthetics(batch_imgs)
+                    except Exception as e:  # noqa: BLE001 —— 降级链语义：不因单阶段失败中断整批
+                        stage2_error = f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"
+                        _log.warning(
+                            "美学与场景后端不可用，本次分析按『缺少该信号』继续：%s",
+                            stage2_error,
+                        )
+                        degradations.append({
+                            "stage": "美学与场景",
+                            "reason": stage2_error,
+                            "effect": "本次评分未使用美学/场景信号；模型就绪后重跑会自动补齐",
+                        })
+                        if progress_cb:
+                            progress_cb("美学与场景", len(order), len(order))
+                        continue
                     rows = []
                     for i, r in zip(valid, res):
                         clip_res[i] = r
@@ -419,7 +499,7 @@ def analyze_directory(root: str, db_path: str,
                                      "aesthetic": r["aesthetic"],
                                      "scene": r["scene"],
                                      "scene_conf": r["scene_conf"],
-                                     "scene_model": inference.aesthetic_model_name()})
+                                     "scene_model": backend_impl.aesthetic_model_name()})
                     # 【断点续跑】逐批回写美学/场景（批量事务）
                     store.upsert_photos_batch(rows)
                 if progress_cb:
@@ -594,6 +674,15 @@ def analyze_directory(root: str, db_path: str,
 
                 s, conf = resolve_scene(i)
                 aes = resolve_aesthetic(i)
+                # 【v0.6 S2-2 / G3】持久化时必须区分"真实信号"与"兜底默认值"：
+                # 阶段二降级时 resolve_scene/resolve_aesthetic 会给出 "其他" / 50.0
+                # 这类兜底值，若原样入库，下一轮增量判断（aesthetic IS NULL → 需重跑
+                # CLIP）会认为"已经算过"，降级就被**永久固化**，模型就绪也不会补齐。
+                # 只有存在真实来源（本次 CLIP 结果 / 库中历史值 / 人工场景修正）才写入。
+                has_clip = i in clip_res
+                has_aes = has_clip or old.get("aesthetic") is not None
+                has_scene = (has_clip or old.get("scene") is not None
+                             or bool(old.get("scene_manual")))
                 is_cand = is_uncertain and p in pick_rank
                 rank = pick_rank.get(p, 0) if is_cand else 0
                 is_best = (not is_uncertain and p == best_path)
@@ -603,9 +692,10 @@ def analyze_directory(root: str, db_path: str,
                     "height": meta[i]["height"],
                     "asset_pair_id": meta[i].get("asset_pair_id"),
                     "asset_role": meta[i].get("asset_role"),
-                    "scene": s, "scene_conf": conf,
+                    "scene": s if has_scene else None,
+                    "scene_conf": conf if has_scene else None,
                     "blur_score": blur, "over_ratio": over, "under_ratio": under,
-                    "aesthetic": aes,
+                    "aesthetic": aes if has_aes else None,
                     "eye_open": (m.get("ear") if m_ok else old.get("eye_open")),
                     "is_face": int(is_face), "brisque": qscore,
                     "eye_close_prob": (m.get("eye_close_prob") if m_ok
@@ -634,7 +724,7 @@ def analyze_directory(root: str, db_path: str,
 
         # ---- 汇总 ----
         store.set_meta("source_root", root_abs)
-        store.set_meta("ai_models", _ai_model_signature())
+        store.set_meta("ai_models", _ai_model_signature(backend_impl))
         st = store.stats()
         _log.info("分析完成：%s 张，新增 %s，耗时 %.1fs", n, n_new, time.time() - t_start)
         _log.info(
@@ -650,11 +740,13 @@ def analyze_directory(root: str, db_path: str,
             "candidate_photos": n_candidate_photos,
             "waste": waste_count,
             "scene_dist": st.get("scenes", {}),
-            "aesthetic_model": inference.aesthetic_model_name(),
-            "quality_model": inference.quality_model_name(),
+            "aesthetic_model": backend_impl.aesthetic_model_name(),
+            "quality_model": backend_impl.quality_model_name(),
+            "backend": backend_impl.name,
             "eye_model": _faces.eye_model_name() if _faces is not None else "none",
             "elapsed": time.time() - t_start,
             "phase_timing": phase_t,
+            "degradations": _all_degradations(),
             "message": "分析完成",
         }
 

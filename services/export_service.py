@@ -11,17 +11,28 @@ from typing import Callable, Literal
 from uuid import uuid4
 
 from engine.config import RAW_EXTS
+from engine.log import get_logger
 from engine.store import PhotoStore
 from .asset_pairing import AssetPair
 from .metadata_writer import MetadataWriter
 from .xmp_service import XmpSelection, write_sidecar
 
 
+# 【v0.6 S3-8】必须用项目统一 logger（engine.log 会给根 logger 挂控制台 + 文件 handler），
+# 直接 logging.getLogger(__name__) 的记录没有任何 handler 承接，只会落到 stderr 的
+# lastResort，永远不会进 smart_cull.log —— 等于没记。
+_log = get_logger("export")
+
+
 AssetMode = Literal["raw", "raw+jpeg", "jpeg"]
 WriteMode = Literal["copy", "in-place-xmp"]
 Status = Literal["success", "skipped", "failed"]
 CAMERA_RAW_EXTS = {extension.casefold() for extension in RAW_EXTS} - {".dng"}
-EMBEDDED_XMP_EXTS = {".jpg", ".jpeg", ".tif", ".tiff", ".psd", ".dng"}
+# 可直接把 XMP 写进文件本身的格式（非 RAW 走 embedded、RAW 走 sidecar）。
+# 【P1-2】必须与 engine.config.JPEG_PNG_EXTS 对齐：扫描既然收 .png，导出就得能交付它。
+# 旧实现漏了 .png，导致 PNG 走 unsupported_format：copy 模式下已复制的交付副本还会被
+# unlink，用户既没拿到照片、也没拿到元数据。
+EMBEDDED_XMP_EXTS = {".jpg", ".jpeg", ".tif", ".tiff", ".psd", ".png", ".dng"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +81,35 @@ def _error_code(error: BaseException) -> str:
     if isinstance(error, FileNotFoundError):
         return "decode_error"
     return "unknown"
+
+
+def _target_key(path: Path) -> str:
+    """同名目标判定的规范化键（Windows 下大小写不敏感，避免 A.JPG / a.jpg 漏判）。"""
+    return os.path.normcase(str(path))
+
+
+def _dedupe_paths(paths: list[Path]) -> tuple[Path, ...]:
+    """按出现顺序去重（同一目标既是「已存在」又是「批次内重复」时只报一次）。"""
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = _target_key(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return tuple(unique)
+
+
+def _best_effort_unlink(path: Path) -> None:
+    """尽力删除交付/临时文件；失败只记日志，绝不向上抛。
+
+    【v0.6 S3-3 / P2-16】清理动作本身也可能 OSError（文件被占用等），
+    若让它冒泡会把整批导出带崩 —— 清理失败只应降级为一条日志。
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        _log.warning("清理交付/临时文件失败（已忽略）：%s", path, exc_info=True)
 
 
 class ExportService:
@@ -160,11 +200,24 @@ class ExportService:
     def plan(self, request: ExportRequest) -> ExportPlan:
         candidates = self._candidates(request)
         eligible = [item for item in candidates if item.problem is None]
-        conflicts = tuple(
-            item.target
-            for item in eligible
-            if request.write_mode == "copy" and item.target.exists()
-        )
+        conflicts: list[Path] = []
+        if request.write_mode == "copy":
+            # ① 目标位置已存在同名文件
+            conflicts.extend(item.target for item in eligible if item.target.exists())
+            # ② 【v0.6 S3-7 / P1-6】批次内同名冲突：来自不同来源目录的同名文件会映射到
+            #    同一个目标（A/IMG_0001.CR3 与 B/IMG_0001.CR3 → 同一 target），真实导出时
+            #    第二个必然撞上 target_conflict。必须在**预览阶段**就暴露。
+            #    同时要覆盖 sidecar 冲突：X.CR3 与 X.NEF 目标不同，但都写 X.xmp。
+            counts: dict[str, int] = {}
+            for item in eligible:
+                for output in (item.target, item.xmp_path):
+                    if output is not None:
+                        key = _target_key(output)
+                        counts[key] = counts.get(key, 0) + 1
+            for item in eligible:
+                for output in (item.target, item.xmp_path):
+                    if output is not None and counts[_target_key(output)] > 1:
+                        conflicts.append(output)
         affected = tuple(
             item.xmp_path
             for item in eligible
@@ -185,7 +238,7 @@ class ExportService:
                 request.target_dir.is_dir() and any(request.target_dir.iterdir())
                 if request.write_mode == "copy" else False
             ),
-            conflicts=conflicts,
+            conflicts=_dedupe_paths(conflicts),
             affected_paths=affected,
         )
 
@@ -204,7 +257,8 @@ class ExportService:
                 os.fsync(handle.fileno())
             os.replace(temporary, target)
         finally:
-            temporary.unlink(missing_ok=True)
+            # 【v0.6 S3-3】清理必须是 best-effort：残留 `.lumina-part` 也不能把整批带崩
+            _best_effort_unlink(temporary)
 
     def _write_xmp(
         self, candidate: _Candidate, request: ExportRequest
@@ -254,7 +308,15 @@ class ExportService:
                 "skipped", candidate.problem, candidate.problem,
             )
         if request.write_mode == "in-place-xmp":
-            return self._write_xmp(candidate, request)
+            # 【v0.6 S3-3 / P1-7】旧实现只为 copy 模式兜了 OSError；in-place 模式下
+            # 单个文件的权限/磁盘错误会沿 run() 的循环抛出，**整批导出中止且不留记录**。
+            try:
+                return self._write_xmp(candidate, request)
+            except OSError as error:
+                return ExportItemResult(
+                    candidate.source, candidate.target, candidate.xmp_path,
+                    "failed", _error_code(error), str(error),
+                )
         if candidate.target.exists() or (
             candidate.xmp_path is not None and candidate.xmp_path.exists()
         ):
@@ -268,11 +330,11 @@ class ExportService:
             copied = True
             result = self._write_xmp(candidate, request)
             if result.status != "success":
-                candidate.target.unlink(missing_ok=True)
+                _best_effort_unlink(candidate.target)
             return result
         except OSError as error:
             if copied:
-                candidate.target.unlink(missing_ok=True)
+                _best_effort_unlink(candidate.target)
             return ExportItemResult(
                 candidate.source, candidate.target, candidate.xmp_path,
                 "failed", _error_code(error), str(error),
@@ -323,7 +385,17 @@ class ExportService:
                     "skipped", "cancelled", "export cancelled before this file",
                 )
             else:
-                result = self._execute_one(candidate, request)
+                # 【v0.6 S3-3 / S3-8】交付是逐文件流程：任何单点异常都必须降级为该文件的
+                # failed 记录 + 一条带 traceback 的日志，绝不能中断整批（旧实现里
+                # in-place 的 OSError、selector 的 ValueError 都会直接抛穿 run()）。
+                try:
+                    result = self._execute_one(candidate, request)
+                except Exception as error:
+                    _log.exception("导出单文件失败，已跳过：%s", candidate.source)
+                    result = ExportItemResult(
+                        candidate.source, candidate.target, candidate.xmp_path,
+                        "failed", _error_code(error), str(error),
+                    )
             results.append(self._record(result))
             if progress is not None:
                 progress(index, total)

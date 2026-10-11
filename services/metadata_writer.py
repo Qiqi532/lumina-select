@@ -13,7 +13,10 @@ from typing import Callable
 from .xmp_service import XmpSelection
 
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".psd", ".dng"}
+# ExifTool 支持写入 XMP 的格式白名单。
+# 【P1-2】加入 .png：ExifTool 对 PNG 的 XMP 读写受支持，且 engine.config.JPEG_PNG_EXTS
+# 已把 .png 纳入扫描范围，导出侧必须能对应交付。需与 export_service.EMBEDDED_XMP_EXTS 保持一致。
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".psd", ".png", ".dng"}
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

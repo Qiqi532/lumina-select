@@ -319,3 +319,92 @@ def test_cancel_after_atomic_item_skips_remainder(tmp_path):
         assert sum(path.suffix == ".CR3" for path in (tmp_path / "delivery").iterdir()) == 1
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# v0.6 S3-3（P1-7 / P2-16）与 S3-7（P1-6）：导出服务加固
+# ---------------------------------------------------------------------------
+
+def _store_for(tmp_path, paths, *, label="P", star=5):
+    assets = pair_assets(list(paths), lambda _path: 1000.0)
+    store = PhotoStore(str(tmp_path / "multi.db"), enable_wal=False)
+    for asset in assets:
+        for path in (asset.raw_path, asset.jpeg_path):
+            if path is not None:
+                store.upsert_photo(
+                    {
+                        "path": str(path),
+                        "fname": path.name,
+                        "asset_pair_id": asset.asset_id,
+                        "star": star,
+                        "label": label,
+                        "decision_source": "manual" if label == "P" else None,
+                    }
+                )
+    return assets, store
+
+
+def test_in_place_oserror_fails_single_item_without_aborting_batch(tmp_path):
+    """S3-3 / P1-7：in-place 模式下单个文件的 OSError 只让该文件失败，不得中断整批。"""
+    _, assets, store = _setup(tmp_path, names=("IMG_0001.CR3", "IMG_0002.CR3"))
+
+    def boom(*_args, **_kwargs):
+        raise PermissionError(13, "denied")
+
+    try:
+        results = ExportService(store, assets, xmp_writer=boom).run(
+            _request(tmp_path, assets, "raw", "in-place-xmp")
+        )
+    finally:
+        store.close()
+    # 旧实现在这里会直接抛 PermissionError，两个文件都不留记录
+    assert len(results) == 2
+    assert {item.status for item in results} == {"failed"}
+    assert {item.error_code for item in results} == {"permission_denied"}
+
+
+def test_run_survives_unexpected_writer_exception(tmp_path, caplog):
+    """S3-3 / S3-8：非 OSError 的单点异常也要降级为该文件失败，并留下 traceback 日志。"""
+    _, assets, store = _setup(tmp_path, names=("IMG_0001.CR3", "IMG_0002.CR3"))
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("writer exploded")
+
+    try:
+        results = ExportService(store, assets, xmp_writer=boom).run(
+            _request(tmp_path, assets, "raw", "in-place-xmp")
+        )
+    finally:
+        store.close()
+    assert len(results) == 2
+    assert {item.status for item in results} == {"failed"}
+    assert "writer exploded" in caplog.text
+
+
+def test_plan_exposes_within_batch_same_name_conflict(tmp_path):
+    """S3-7 / P1-6：来自不同目录的同名文件必须在预览阶段就报冲突。"""
+    folders = [tmp_path / "a", tmp_path / "b"]
+    for folder in folders:
+        folder.mkdir()
+    paths = [folder / "IMG_0001.CR3" for folder in folders]
+    for path in paths:
+        path.write_bytes(b"x")
+    assets, store = _store_for(tmp_path, paths)
+    try:
+        plan = ExportService(store, assets).plan(_request(tmp_path, assets, "raw"))
+        assert set(plan.conflicts) == {
+            tmp_path / "delivery" / "IMG_0001.CR3",
+            tmp_path / "delivery" / "IMG_0001.xmp",
+        }
+    finally:
+        store.close()
+
+
+def test_plan_reports_no_conflict_when_names_are_unique(tmp_path):
+    """S3-7 负向守卫：名字唯一时不得误报冲突。"""
+    _, assets, store = _setup(tmp_path, names=("IMG_0001.CR3", "IMG_0002.CR3"))
+    try:
+        plan = ExportService(store, assets).plan(_request(tmp_path, assets, "raw"))
+        assert plan.conflicts == ()
+    finally:
+        store.close()

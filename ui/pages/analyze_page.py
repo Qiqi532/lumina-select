@@ -1,4 +1,10 @@
-"""Background analysis progress, cancellation, and explicit backend fallback."""
+"""Background analysis progress and cancellation.
+
+【v0.6 S2-1】这里原先还有一个「改用 OpenCV 轻量后端」的回退按钮，做法是把后端写进
+进程级 `config.INFERENCE_BACKEND`。轻量后端已随双版本机制一起下线，后端改为
+`analyze_directory(..., backend=...)` 的**显式参数**，UI 不再持有任何后端全局状态。
+`backend` 透传保留，作为 v0.7 接入 ONNX 后端时的唯一入口。
+"""
 from __future__ import annotations
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -11,6 +17,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from engine.log import get_logger
+
+# 【v0.6 S3-8】worker 里的异常过去只把 str(error) 抛给界面 —— 用户看到一句话，
+# 日志里却没有任何 traceback，出问题后无法复盘。这里补上完整栈。
+_log = get_logger("ui.analyze")
 
 
 class AnalyzeWorker(QThread):
@@ -32,11 +44,9 @@ class AnalyzeWorker(QThread):
 
     def run(self) -> None:
         try:
-            from engine import config
             from engine.pipeline import analyze_directory
 
-            if self.backend is not None:
-                config.INFERENCE_BACKEND = self.backend
+            # 后端是调用参数，不再是进程全局（v0.6 S2-1）。
             result = analyze_directory(
                 self.source,
                 self.db_path,
@@ -44,12 +54,14 @@ class AnalyzeWorker(QThread):
                 use_faces=True,
                 progress_cb=lambda phase, done, total: self.progress.emit(phase, done, total),
                 cancel_check=lambda: self._cancel_requested or self.isInterruptionRequested(),
+                backend=self.backend,
             )
             if self._cancel_requested or (result and result.get("cancelled")):
                 self.cancelled.emit()
             else:
                 self.succeeded.emit(result or {})
         except Exception as error:
+            _log.exception("分析失败（源目录 %s）：%s", self.source, error)
             self.failed.emit(str(error))
 
 
@@ -83,26 +95,18 @@ class AnalyzePage(QWidget):
         self.cancel_button.setObjectName("Danger")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel)
-        self.fallback_button = QPushButton("改用 OpenCV 轻量后端")
-        self.fallback_button.setEnabled(False)
         row.addWidget(self.cancel_button)
-        row.addWidget(self.fallback_button)
         row.addStretch(1)
         panel_layout.addLayout(row)
         layout.addWidget(panel)
         layout.addStretch(1)
-        self._last_source: str | None = None
-        self._last_db: str | None = None
-        self.fallback_button.clicked.connect(self._retry_heuristic)
 
     def start(self, source: str, db_path: str, *, backend: str | None = None) -> None:
         if self.worker is not None and self.worker.isRunning():
             raise RuntimeError("analysis is already running")
-        self._last_source, self._last_db = source, db_path
         self.stage_label.setText("准备分析…")
         self.progress_bar.setValue(0)
         self.cancel_button.setEnabled(True)
-        self.fallback_button.setEnabled(False)
         worker = AnalyzeWorker(source, db_path, backend=backend, parent=self)
         self.worker = worker
         worker.progress.connect(self._on_progress)
@@ -122,18 +126,13 @@ class AnalyzePage(QWidget):
 
     def _on_failure(self, message: str) -> None:
         self.cancel_button.setEnabled(False)
-        self.fallback_button.setEnabled(True)
-        self.stage_label.setText("分析失败；可重试或切换轻量后端")
+        self.stage_label.setText("分析失败；可重试")
         self.failed.emit(message)
 
     def _on_cancelled(self) -> None:
         self.cancel_button.setEnabled(False)
         self.stage_label.setText("分析已取消，可重新开始")
         self.cancelled.emit()
-
-    def _retry_heuristic(self) -> None:
-        if self._last_source and self._last_db:
-            self.start(self._last_source, self._last_db, backend="heuristic")
 
     def cancel(self) -> None:
         if self.worker is not None and self.worker.isRunning():

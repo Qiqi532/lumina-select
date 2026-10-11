@@ -14,6 +14,7 @@ store.py —— SQLite 读写（含 is_uncertain / is_candidate 字段）
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -75,6 +76,35 @@ PHOTO_FIELDS = [
     "shutter_speed", "aperture", "iso", "analysis_backend", "quality_model",
     "scene_model", "analysis_ms", "decision_source", "decision_updated_at",
 ]
+
+# 【P0-1】由【模型 / 算法】派生的度量列。
+# 这些值的含义随「美学模型 + 画质模型 + 闭眼模型」的签名而变——换了模型，
+# 旧值就不再可比，必须重算。模型签名变化时只清空本清单，其余一律保留。
+#
+# 刻意【不】包含：path / fname / ts / mtime / width / height（文件事实）、
+# asset_pair_id / asset_role（由文件名+EXIF 配对派生）、camera_model / lens_model /
+# focal_length / shutter_speed / aperture / iso（EXIF 事实），以及摄影师的人工
+# 作业 star / label / decision_source / decision_updated_at / scene_manual。
+METRIC_FIELDS = [
+    "scene", "scene_conf",
+    "blur_score", "over_ratio", "under_ratio",
+    "aesthetic", "eye_open", "is_face", "eye_close_prob", "brisque",
+    "phash", "group_id", "comp_score",
+    "is_waste", "is_best", "is_uncertain", "is_candidate", "candidate_rank",
+    "is_similar_loser", "waste_reasons",
+    "analysis_backend", "quality_model", "scene_model", "analysis_ms",
+]
+
+# 人工决策字段（换分析源时归档/恢复的对象）
+DECISION_FIELDS = (
+    "path", "star", "label", "decision_source", "decision_updated_at", "scene_manual",
+)
+
+# 判定"这一行有人工作业"的口径：任一人工作业字段非空即算。
+_HAS_DECISION_SQL = (
+    "star > 0 OR label IS NOT NULL OR decision_source IS NOT NULL "
+    "OR scene_manual IS NOT NULL"
+)
 
 
 class PhotoStore:
@@ -139,6 +169,79 @@ class PhotoStore:
         self.conn.execute("DELETE FROM groups")
         self.conn.commit()
 
+    # ------------------------------------------------------------------
+    # 【P0-1】模型签名变化时的数据保护
+    # ------------------------------------------------------------------
+    def reset_metrics(self):
+        """清空【模型派生】的度量列与派生表，保留人工决策。
+
+        与 clear_all() 的差别正是 P0-1 的修复点：
+          * **不删行** → 摄影师的复核结果（star / label / decision_source /
+            decision_updated_at）与人工场景修正（scene_manual）全部保留；
+          * 度量列置 NULL、groups / face_regions 清空 → pipeline 的增量判断
+            （blur_score IS NULL / phash 为空 → 重新纳入阶段一；
+             aesthetic 或 scene 为空 → 重新纳入 CLIP）会自动把这些照片重算一遍。
+
+        净效果：换后端 / 换模型 = 「重算，但不丢人工作业」。
+        旧实现调用 clear_all()，会连同人工标星与判废一起删掉，且全程无提示。
+        """
+        assignments = ", ".join(f"{field}=NULL" for field in METRIC_FIELDS)
+        with self.conn:
+            self.conn.execute(f"UPDATE photos SET {assignments}")
+            self.conn.execute("DELETE FROM groups")
+            self.conn.execute("DELETE FROM face_regions")
+
+    def stash_decisions(self, key: str) -> int:
+        """把库中全部人工决策快照写入 meta（换分析源前调用），返回条数。
+
+        换分析源会整库清空。先归档，才可能在用户切回同一目录时还原。
+        """
+        rows = [
+            self._row_to_dict(row)
+            for row in self.conn.execute(
+                f"SELECT {', '.join(DECISION_FIELDS)} FROM photos WHERE {_HAS_DECISION_SQL}"
+            ).fetchall()
+        ]
+        self.set_meta(key, json.dumps(rows, ensure_ascii=False))
+        return len(rows)
+
+    def rehydrate_decisions(self, key: str) -> int:
+        """用 meta 里的决策快照重建「决策骨架行」（只含 path + 人工字段）。
+
+        度量列留 NULL，随后的增量分析会把它们重新算出来；而 star / label /
+        scene_manual 已经在位，因此「切走目录 A、又切回 A」不会丢掉之前的复核。
+        已存在的行不覆盖（DO NOTHING），避免压掉本次会话刚做的判断。
+        """
+        raw = self.get_meta(key)
+        if not raw:
+            return 0
+        try:
+            rows = json.loads(raw)
+        except (TypeError, ValueError):
+            _log.warning("决策快照损坏，已忽略：%s", key)
+            return 0
+        if not isinstance(rows, list):
+            return 0
+        payload = [
+            (
+                row.get("path"), row.get("star"), row.get("label"),
+                row.get("decision_source"), row.get("decision_updated_at"),
+                row.get("scene_manual"),
+            )
+            for row in rows
+            if isinstance(row, dict) and row.get("path")
+        ]
+        if not payload:
+            return 0
+        with self.conn:
+            self.conn.executemany(
+                "INSERT INTO photos (path, star, label, decision_source, "
+                "decision_updated_at, scene_manual) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(path) DO NOTHING",
+                payload,
+            )
+        return len(payload)
+
     def close(self):
         try:
             self.conn.close()
@@ -171,20 +274,27 @@ class PhotoStore:
         self.conn.commit()
 
     def upsert_photos_batch(self, rows: list[dict]):
-        """批量 upsert（单事务提交，写入更快；用于逐张入库/断点续跑）。"""
+        """批量 upsert（单事务提交，写入更快；用于逐张入库/断点续跑）。
+
+        列集合取【所有行键的并集】（按 PHOTO_FIELDS 顺序），而不是只看首行。
+        【P1-1】旧实现取 rows[0] 的键：一旦首行是"解码失败"的骨架行（不含任何
+        度量字段），同一块里其余照片的 blur / phash / 曝光 / 人脸指标就会被
+        静默丢弃，而且断点续跑还会把它们判成"缺指标"反复重算。
+        """
         if not rows:
             return
-        # 统一按 PHOTO_FIELDS 白名单列顺序构造，避免每条字段集合不一致
-        first = {k: rows[0].get(k) for k in PHOTO_FIELDS if k in rows[0]}
-        if "path" not in first:
+        present: set[str] = set()
+        for row in rows:
+            present.update(row.keys())
+        cols = [field for field in PHOTO_FIELDS if field in present]
+        if "path" not in cols:
             raise ValueError("photo 必须包含 path")
-        cols = list(first.keys())
         cols_sql = ", ".join(cols)
         placeholders = ", ".join(["?"] * len(cols))
         sql = (f"INSERT INTO photos ({cols_sql}) VALUES ({placeholders}) "
                f"ON CONFLICT(path) DO UPDATE SET "
                + ", ".join(f"{k}=excluded.{k}" for k in cols if k != "path"))
-        # 行字段按 cols 顺序取（缺失字段补 None）
+        # 行字段按 cols 顺序取（该行缺失的字段补 None）
         with self.conn:
             self.conn.executemany(
                 sql, [[r.get(k) for k in cols] for r in rows])

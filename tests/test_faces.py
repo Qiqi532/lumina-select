@@ -285,3 +285,52 @@ def test_eye_classifier_load_success_rearms_the_one_time_report(monkeypatch):
     assert processor is not None and device is not None
     assert faces._eye_failure_reported is False, "加载成功 ⇒ 允许下次故障重新提示"
     assert degradations.drain() == [], "加载成功不该产生降级事件"
+
+
+# ---------------------------------------------------------------------------
+# 【v0.6 S3-补 / 0B】"只提示一次"必须按**分析轮次**计量，而不是按进程。
+#
+# 场景：模型长期不可用（离线缺权重 / 缓存残缺）——加载永远失败，于是
+# _get_eye_classifier 末尾那句「加载成功 ⇒ 清标志」永远不会执行。
+# 旧实现下第二轮起既不写 warning、也不上报降级事件，用户以为一切正常，
+# 实际闭眼判定已经悄悄退化成"只用 EAR"。这正是 v0.6 要消除的静默降级。
+# ---------------------------------------------------------------------------
+def test_eye_failure_report_is_per_run_not_per_process(monkeypatch, caplog):
+    from engine import degradations
+
+    monkeypatch.setattr(faces, "_eye_failure_reported", False)
+
+    def boom():
+        raise RuntimeError("Cannot find model weights (offline)")
+
+    monkeypatch.setattr(faces, "_get_eye_classifier", boom)
+
+    landmarks = [(0.5, 0.5)] * 478
+    per_run_events = []
+    per_run_warnings = []
+    for _ in range(3):                      # 连续三轮分析，模型一直不可用
+        degradations.drain()                # 流水线在每轮开始时做的事
+        faces.reset_run_state()             # 同上（本轮新增）
+        with caplog.at_level("WARNING"):
+            results = [faces.eye_close_probability(_pil(), landmarks) for _ in range(4)]
+        assert results == [None] * 4
+        per_run_events.append(len(degradations.drain()))
+        per_run_warnings.append(sum(
+            "闭眼分类器运行失败" in r.getMessage() for r in caplog.records
+        ))
+        caplog.clear()
+
+    assert per_run_events == [1, 1, 1], "每一轮都必须重新上报降级；不能因上一轮报过就永久静音"
+    assert per_run_warnings == [1, 1, 1], "每一轮也只允许一条 warning（不退回逐张刷屏）"
+
+
+def test_reset_run_state_clears_the_one_time_flag(monkeypatch):
+    from engine import degradations
+
+    degradations.drain()
+    monkeypatch.setattr(faces, "_eye_failure_reported", True)
+
+    faces.reset_run_state()
+
+    assert faces._eye_failure_reported is False
+    assert degradations.drain() == [], "重置标志本身不是降级事件"

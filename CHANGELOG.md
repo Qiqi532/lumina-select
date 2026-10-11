@@ -53,6 +53,10 @@
 - **P1-11 / P1-12**：CUDA OOM 时只改 device 不搬模型（下次前向必炸）、闭眼分类器失败每张照片
   刷一条 warning（数千行日志淹没真问题）→ GPU 回退真的把模型搬到 CPU 并重试一次；
   失败每轮只报一次。
+- **0B（集成复核发现，S3-补）**：`_eye_failure_reported` 只在分类器**加载成功**时清零；
+  模型长期不可用（离线缺权重、HF 缓存残缺）时那句永远不执行 → 第二轮起既不写 warning
+  也不上报降级事件，静默降级重现。改为 `faces.reset_run_state()`，由流水线在**每轮分析
+  开始**（与 `degradations.drain()` 同一轮次边界）显式调用。
 
 ### 新增
 
@@ -74,9 +78,11 @@
 
 ### 测试与门禁
 
-- 全量测试：**239 passed**（`pytest tests -q -o addopts=`）/ **238 passed, 1 deselected**（默认标记）。
+- 全量测试：**242 passed**（`pytest tests -q -o addopts=`）/ **241 passed, 1 deselected**（默认标记）。
 - 新增测试文件：`test_degradations.py`、`test_aesthetics.py`、`test_models_guard.py`、
   `test_upgrade_v06.py`（G4 端到端：旧后端产物重算后人工决策零丢失）。
+- 1000 项复核基准实测：加载 0.026 s（预算 3.0 s）、5 个筛选各 ≤ 0.3 ms（预算 0.3 s），
+  `scripts/benchmark_review.py --items 1000` 判定通过。
 - **G1 数据保护**通过；**G2 测试全绿**通过；**G3 离线自足**通过（`data/_offline_probe.py`、
   `data/_cache_verify.py`）；**G4 迁移**通过；**G6 许可**通过（67 packages，pyiqa 缺席）。
 - **未完成门禁（不阻塞 v0.6，属后续版本）**：G5 影子评测（v0.7 底座/算法替换）、

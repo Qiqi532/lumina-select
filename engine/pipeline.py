@@ -313,6 +313,11 @@ def analyze_directory(root: str, db_path: str,
     # 通过 engine.degradations 上报。分析开始时先清掉上一轮残留，返回前再取走合并，
     # 保证它只是「本轮事件日志」而不会变成跨轮状态。
     degradation_events.drain()
+    # 【v0.6 S3-补 / 0B】引擎侧的一次性降级标志也必须**按轮次**重置：闭眼分类器长期
+    # 不可用时，上一轮置位的「已提示」标志会让后续轮次既不再写日志、也不再上报降级
+    # 事件 —— 静默降级重现。放在这里与事件队列的清空同处一个轮次边界。
+    if _faces is not None:
+        _faces.reset_run_state()
     degradations: list[dict] = []
     # 【v0.6 S4-1 / G4】本次是否为"旧库/换模型后的重算"、保留了哪些人工决策。
     # 默认 False，真正发生重算时在下面填充；无论成功还是取消都随结果返回。

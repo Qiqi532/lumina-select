@@ -4,7 +4,7 @@
 当前分支：`lightweight`（注意：此分支名**名不符实**，它实际是开发主线）
 远端状态：`origin/lightweight` 停在 `0832f7a`；本地已新增 v0.6 的 S1/S2/S3 三个提交（**未推送**）；`master` 停在 `37332c4`（v0.4.0 回溯点）
 
-> **✅ v0.6「单版本基线」代码与文档已收口**：S1 数据保护（门禁 G1 通过）、S2 双版本收敛、S3 加固层、S4 迁移与文档层全部落地；本地提交齐备、每步测试全绿，**尚未推送远端**。
+> **✅ v0.6「单版本基线」代码与文档已收口**：S1 数据保护（门禁 G1 通过）、S2 双版本收敛、S3 加固层（含复核补丁 0B）、S4 迁移与文档层全部落地；本地提交齐备、每步测试全绿，**尚未推送远端**。
 > 完整计划、门禁与风险清单见 **`../开发计划_v0.6-v0.8_2026-10-10.md`**。
 > **轻量版已删除**（后端、配置开关、打包四件套、依赖锁、两版对比断言），不要再基于它开发。
 > **旧项目可直接打开**：schema 升级先自动备份、指标按需重算、人工复核零丢失，并可用「导出已复核清单」留一份 CSV 兜底。
@@ -75,10 +75,10 @@ S2-1 进一步删除了进程级后端开关 `config.INFERENCE_BACKEND`——P0-
 
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
-.\.venv\Scripts\python.exe -m pytest tests                      # 238 passed, 1 deselected（约 21s）
-.\.venv\Scripts\python.exe -m pytest -q -o 'addopts='           # 239 passed（含 e2e，约 24s）
-.\.venv\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-standard.json
-.\.venv\Scripts\python.exe scripts\check_release_licenses.py    # 67 packages
+.\.venv\Scripts\python.exe -m pytest tests                      # 241 passed, 1 deselected（约 54s）
+.\.venv\Scripts\python.exe -m pytest -q -o 'addopts='           # 242 passed（含 e2e，约 81s）
+.\.venv\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-standard.json    # 实测 load 0.026s、筛选各 ≤0.3ms → passed
+.\.venv\Scripts\python.exe scripts\check_release_licenses.py --requirements requirements.txt --policy release/license-policy.toml    # 67 packages
 .\.venv\Scripts\python.exe data\_cache_verify.py                # 离线加载全部运行期模型
 .\.venv\Scripts\python.exe data\_offline_probe.py               # 断网+空缓存 → 降级完成而非崩溃
 ```
@@ -96,4 +96,4 @@ PyInstaller 规格：`光影选片助手_dist.spec`（**唯一**发行规格）�
 - 验证/复现脚本一律写 `data/`，不要落在仓库根目录。
 - 远端仓库为 `https://github.com/Qiqi532/lumina-select.git`（非 `smart-cull-assistant`）。
 - **推送前须经用户确认**；若遇 502，用 `git -c http.version=HTTP/1.1 -c pack.threads=1 push --no-thin origin <branch>`，成功判据为 `git ls-remote origin refs/heads/<branch>` 哈希已更新。
-- 最近提交（v0.6）：S3 加固层 `07b824a`、S2 收敛层 `464797b`、S1 阻断层 `a89d66f`；其前为 `0832f7a`（文档）、`0f5921b`（Unicode 导出路径）、`572bcd6`（隔离候选输入）。
+- 最近提交（v0.6）：0B 复核补丁 `6ae90bc`、S4 迁移与文档层 `8412118`、S3 加固层 `07b824a`、S2 收敛层 `464797b`、S1 阻断层 `a89d66f`；其前为 `0832f7a`（文档）、`0f5921b`（Unicode 导出路径）、`572bcd6`（隔离候选输入）。

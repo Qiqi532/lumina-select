@@ -284,7 +284,25 @@ _eye_model = None
 _eye_proc = None
 _eye_dev = None
 # 【v0.6 S3-6 / P1-12】分类器失败只需提示一次（旧实现每张照片刷一条 warning）
+# 【v0.6 S3-补 / 0B】"一次"的粒度是**每次分析运行**，而不是整个进程 —— 见 reset_run_state()。
 _eye_failure_reported = False
+
+
+def reset_run_state() -> None:
+    """重置「本轮已提示过降级」的一次性标志；由分析流水线在每轮开始时调用。
+
+    【v0.6 S3-补 / 0B】旧实现只在分类器**加载成功**时把标志清回 False
+    （见 _get_eye_classifier 末尾）。如果模型长期不可用 —— 离线缺权重、缓存残缺 ——
+    加载会一直失败，那条清零语句永远不会执行，标志永远停在 True：
+    第二轮起既不写 warning，也不再上报降级事件，**静默降级**重新出现，
+    恰好是 v0.6 要消除的那个行为。
+
+    因此把「一轮一次」的语义交给明确的轮次边界，而不是依赖「下次加载成功」这个
+    永远不会到来的事件。同 _get_eye_classifier 里的清零一起，两条路径都保证
+    一次失败只会被提示一次、且每一轮都会重新提示。
+    """
+    global _eye_failure_reported
+    _eye_failure_reported = False
 
 
 def _get_eye_classifier():

@@ -421,3 +421,20 @@ def test_cancelled_result_also_carries_engine_side_degradations(full_data_dir, t
         {"stage": "闭眼分类器", "reason": "RuntimeError: boom", "effect": "只用 EAR"}
     ]
     assert degradations.drain() == []
+
+
+def test_each_analysis_run_resets_one_shot_engine_flags(
+    full_data_dir, tmp_db_path, monkeypatch
+):
+    """【v0.6 S3-补 / 0B】接线检查：每轮分析开始必须重置引擎侧的一次性降级标志。
+
+    否则模型长期不可用时，上一轮的「已提示」标志会让后续轮次静默降级
+    （engine/faces.py 的回归用例锁定行为，这条锁定管线确实调用了它）。
+    """
+    from engine import faces
+
+    monkeypatch.setattr(faces, "_eye_failure_reported", True)
+
+    _run(full_data_dir, tmp_db_path)
+
+    assert faces._eye_failure_reported is False, "分析开始时必须重置一次性降级标志"

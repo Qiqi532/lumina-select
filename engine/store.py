@@ -14,8 +14,10 @@ store.py —— SQLite 读写（含 is_uncertain / is_candidate 字段）
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
+from pathlib import Path
 import sqlite3
 import time
 
@@ -107,10 +109,23 @@ _HAS_DECISION_SQL = (
 )
 
 
+def _format_timestamp(value) -> str:
+    """epoch 秒 → 本地可读时间；空值/非法值返回空串（供导出清单使用）。"""
+    if value is None:
+        return ""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+
 class PhotoStore:
     def __init__(self, db_path: str, enable_wal: bool = True):
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        # 【v0.6 S4-1】旧库（schema v4）升级前会自动备份，备份路径留在实例上：
+        # UI 必须能如实告诉用户"这个项目被升级过、备份在哪"，而不是悄悄改库。
+        self.upgrade_backup: Path | None = None
         self.conn = sqlite3.connect(db_path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         # 健壮性（PRD 第 7 章）：WAL 日志模式 + 事务化写入，异常退出不损坏索引
@@ -147,7 +162,7 @@ class PhotoStore:
     # 基础
     # ------------------------------------------------------------------
     def _create_schema(self):
-        migrate_database(self.conn, self.db_path)
+        self.upgrade_backup = migrate_database(self.conn, self.db_path)
 
     # ------------------------------------------------------------------
     # 元信息
@@ -241,6 +256,107 @@ class PhotoStore:
                 payload,
             )
         return len(payload)
+
+    # ------------------------------------------------------------------
+    # 【v0.6 S4-1 / G4】旧库升级提示 + 已复核清单导出（兜底）
+    # ------------------------------------------------------------------
+    def count_decisions(self) -> int:
+        """有人工作业的照片数（star / label / decision_source / scene_manual 任一非空）。"""
+        row = self.conn.execute(
+            f"SELECT COUNT(*) FROM photos WHERE {_HAS_DECISION_SQL}"
+        ).fetchone()
+        return row[0] if row else 0
+
+    def legacy_backends(self) -> list[str]:
+        """返回库中【已不再发行】的分析后端名（旧库升级提示用）。
+
+        判定口径是"是否还在后端注册表里"，而不是硬编码 "heuristic"：
+        轻量后端已随 v0.6 S2 下线、不在注册表中，于是自然被判为过时；
+        将来新增的 onnx 后端只要注册过就不会被误报。
+        """
+        from .inference import backend_names
+
+        known = set(backend_names())
+        rows = self.conn.execute(
+            "SELECT DISTINCT analysis_backend FROM photos "
+            "WHERE analysis_backend IS NOT NULL AND analysis_backend <> ''"
+        ).fetchall()
+        return sorted(name for (name,) in rows if name not in known)
+
+    def upgrade_report(self) -> dict:
+        """给 UI 用的「这个项目是不是旧库、升级时发生了什么」报告。
+
+        两种"旧"都要如实说清楚，不能让用户在无感知的情况下被换掉一套分数：
+
+          * **schema 升级**：v4 → v5，升级前已自动备份（备份路径一并返回）；
+          * **分析源过时**：库里记录的 analysis_backend 已不再发行（典型是轻量版
+            heuristic），它的指标与当前版本不可比，下次分析会重算 —— 而人工决策
+            由 reset_metrics() 保住。
+        """
+        from .inference import DEFAULT_BACKEND
+
+        legacy = self.legacy_backends()
+        backup = str(self.upgrade_backup) if self.upgrade_backup else None
+        decisions = self.count_decisions()
+        return {
+            "schema_upgraded": backup is not None,
+            "backup_path": backup,
+            "legacy_backends": legacy,
+            "current_backend": DEFAULT_BACKEND,
+            "decision_count": decisions,
+            "needs_attention": bool(backup or legacy),
+            "source_root": self.get_meta("source_root"),
+        }
+
+    def upgrade_summary(self) -> str:
+        """把 upgrade_report() 变成一句可直接显示给用户的中文说明。"""
+        report = self.upgrade_report()
+        if not report["needs_attention"]:
+            return "项目为当前版本，无需升级。"
+        parts = []
+        if report["schema_upgraded"]:
+            parts.append(
+                f"项目数据库已从旧版 schema 升级；升级前的完整备份在 {report['backup_path']}"
+            )
+        if report["legacy_backends"]:
+            names = "、".join(report["legacy_backends"])
+            parts.append(
+                f"这批照片由已下线的分析后端（{names}）产生，指标与当前版本"
+                f"（{report['current_backend']}）不可比，下次分析会自动重算"
+            )
+        parts.append(f"你的人工复核（{report['decision_count']} 张）会全部保留")
+        return "；".join(parts) + "。"
+
+    def export_decisions(self, target: str | Path) -> dict:
+        """把全部人工复核导出为 CSV（UTF-8 BOM，Excel 可直接打开中文）。
+
+        【v0.6 S4-1】这是"兜底"：库文件损坏、被误删、或升级后表现异常时，摄影师
+        手里仍有一份**可直接阅读**的复核清单（路径 / 星级 / 保留排除 / 人工场景 /
+        决策来源 / 决策时间），不必依赖任何程序才能看一眼自己做过什么。
+        """
+        path = Path(target)
+        if path.parent and str(path.parent):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        fields = ", ".join(DECISION_FIELDS)
+        rows = self.conn.execute(
+            f"SELECT {fields} FROM photos WHERE {_HAS_DECISION_SQL} ORDER BY path"
+        ).fetchall()
+        header = ["文件路径", "文件名", "星级", "保留/排除", "人工场景", "决策来源", "决策时间"]
+        # newline="" 是 csv 模块的要求；utf-8-sig 让 Excel 正确识别中文
+        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(header)
+            for row in rows:
+                writer.writerow([
+                    row["path"],
+                    os.path.basename(row["path"] or ""),
+                    row["star"] if row["star"] is not None else 0,
+                    row["label"] or "",
+                    row["scene_manual"] or "",
+                    row["decision_source"] or "",
+                    _format_timestamp(row["decision_updated_at"]),
+                ])
+        return {"path": str(path), "rows": len(rows), "bytes": path.stat().st_size}
 
     def close(self):
         try:

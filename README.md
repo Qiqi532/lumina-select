@@ -9,7 +9,7 @@
 
 **关键指标**（RTX 4060 Laptop，1000 张实测）：全流程 63.9 s（验收 ≤5 min）；增量重分析 3.87 s；断点续跑、分块流式内存控制（5000+ 张不爆内存）；pytest 单测 + 端到端冒烟。
 
-> 当前为 v0.5 开发候选，非正式发行。Lightroom 实机验收与 PyQt6/Qt 发行许可人工批准仍待完成；记录表见 `docs/v0.5-manual-acceptance.md`。旧版性能数字仅供历史参考。
+> 当前为 v0.6 开发候选，非正式发行。Lightroom 实机验收与 PyQt6/Qt 发行许可人工批准仍待完成；记录表见 `docs/v0.5-manual-acceptance.md`。旧版性能数字仅供历史参考。
 
 ---
 
@@ -96,7 +96,7 @@ tests/                 pytest 单元测试 + 端到端冒烟
 - Windows / macOS / Linux，Python 3.10+（本项目在 Windows 11 + Python 3.12 验证）
 - **GPU 可选**：有 NVIDIA GPU（CUDA）更快；无 GPU 自动降级 CPU（慢但可用）
 
-### Torch 标准版：安装与运行
+### 安装与运行
 ```bash
 # 建议使用干净环境；如本机已有匹配 CUDA 的 torch，也可用 --system-site-packages 复用
 python -m venv .venv
@@ -108,6 +108,18 @@ NVIDIA 用户如需 CUDA 构建，应先按锁定版本选择匹配的 Torch/Tor
 
 双击 exe 或运行脚本后直接弹出**原生桌面窗口**：选择照片文件夹（原生文件夹对话框）→ 点「开始分析」→ 自动进入复核/导出。
 > 已打包的自包含 exe 见下方「打包成 exe · 方案 A」，双击 `dist\光影选片助手\光影选片助手.exe` 即用，无需 .venv。
+
+### 从 v0.5 升级：旧项目怎么办
+
+v0.6 只发行一个版本，旧项目**可以直接打开，不需要重建**，但升级过程是**明示**的（门禁 G4）：
+
+| 情形 | 工具的做法 | 你要知道的事 |
+| --- | --- | --- |
+| 旧 schema 的库（v0.5 及更早） | 打开时自动升级到当前 schema，**升级前先备份**到 `项目库同级/<库名>.pre-v05.bak` | 状态行出现「旧库升级说明」按钮，点开能看到备份路径 |
+| 库里记录的分析后端已下线（轻量版 `heuristic`）或模型签名变化 | 下次分析**只重算指标**（`reset_metrics()`），**不动人工复核** | 分析完成时状态行会写明「指标已重算 + 人工复核 N 条已保留」 |
+| 想先留一份纸质单据 | 状态行的「导出已复核清单」一键导出 CSV（路径/星级/保留排除/人工场景/时间） | 库文件损坏或被误删时，仍能查到自己做过什么 |
+
+> 升级绝不静默：任何"重算"都会说明原因（模型变了 / 旧后端不可比），任何人工决策（`star` / `label` / `scene_manual`）都不会被顺手删掉。
 
 ### 📦 打包成 exe（Windows 软件形态）
 
@@ -122,7 +134,7 @@ NVIDIA 用户如需 CUDA 构建，应先按锁定版本选择匹配的 Torch/Tor
 .\.venv\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-standard.json
 ```
 
-#### Torch 标准版：自包含 onedir 构建
+#### 自包含 onedir 构建
 把全部依赖（torch / transformers / PyQt6 / mediapipe / 等）一并打进一个文件夹，双击 `光影选片助手.exe` 即可运行，**不要求源码或 .venv 在场**：
 ```bash
 # 一键打包自包含 onedir（首次约 3~8 分钟，体积较大）
@@ -135,7 +147,7 @@ set ZIP=1 & build_dist.bat
 - 对应规格：`光影选片助手_dist.spec`（入口直接是 `app_qt.py`，显式保留 CLIP、ViT 与 FaceMesh 所需模块，不递归打包测试和无关模型族，且不包含 pyiqa）。
 - **2026-09-07 本机实测**：干净 CPU Torch 环境构建约 5 分钟，onedir 产物 910.0 MiB / 6608 个文件；Inno Setup 安装包 228.4 MiB。
 
-#### Torch 标准版：制作安装包（单文件 setup.exe，含卸载）
+#### 制作安装包（单文件 setup.exe，含卸载）
 用 [Inno Setup](https://jrsoftware.org/isdl.php) 把方案 A 的 `dist\光影选片助手\` 封装为安装程序：
 ```bash
 # 1) 先有方案 A 产物 dist\光影选片助手\

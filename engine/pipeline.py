@@ -314,6 +314,9 @@ def analyze_directory(root: str, db_path: str,
     # 保证它只是「本轮事件日志」而不会变成跨轮状态。
     degradation_events.drain()
     degradations: list[dict] = []
+    # 【v0.6 S4-1 / G4】本次是否为"旧库/换模型后的重算"、保留了哪些人工决策。
+    # 默认 False，真正发生重算时在下面填充；无论成功还是取消都随结果返回。
+    upgrade: dict = {"recomputed": False}
 
     def _all_degradations() -> list[dict]:
         """本函数内记录的 + 引擎侧上报的降级事件（去重后合并）。"""
@@ -337,7 +340,7 @@ def analyze_directory(root: str, db_path: str,
     def cancelled(phase: str, **extra) -> dict:
         payload = {"total": n, "message": "已取消", "cancelled": True,
                    "new_analyzed": n_new, "phase_timing": phase_t,
-                   "degradations": _all_degradations()}
+                   "degradations": _all_degradations(), "upgrade": dict(upgrade)}
         payload.update(extra)
         _phase_end(phase)
         return payload
@@ -397,7 +400,26 @@ def analyze_directory(root: str, db_path: str,
                 # 人工场景修正一起删掉——摄影师的复核结果被静默抹除。
                 # reset_metrics() 置空度量列后，下面的增量判断会自动重新纳入
                 # 阶段一与 CLIP，等价于"重算但不丢人工作业"。
+                #
+                # 【v0.6 S4-1 / G4】"重算"这件事必须对用户可见：UI 要能告诉用户
+                # 「模型换过了、这次分数是重算的、你的 N 条复核还在」，而不是让
+                # 分数悄悄换一套。旧库（含轻量版 heuristic 产物）也在这条路径上。
+                decisions = store.count_decisions()
+                legacy_backends = store.legacy_backends()
                 store.reset_metrics()
+                upgrade = {
+                    "recomputed": True,
+                    "reason": "模型签名变化" if prev_sig else "旧库缺少模型签名",
+                    "previous_models": prev_sig,
+                    "current_models": cur_sig,
+                    "decisions_preserved": decisions,
+                    "legacy_backends": legacy_backends,
+                }
+                _log.warning(
+                    "检测到模型/后端变化，已重算指标并保留人工决策 %s 条"
+                    "（旧签名=%s，新签名=%s，过期后端=%s）",
+                    decisions, prev_sig, cur_sig, legacy_backends or "无",
+                )
         meta: list[dict] = []
         old_map = store.photos_map()
         need_stage1: list[int] = []
@@ -747,6 +769,7 @@ def analyze_directory(root: str, db_path: str,
             "elapsed": time.time() - t_start,
             "phase_timing": phase_t,
             "degradations": _all_degradations(),
+            "upgrade": dict(upgrade),
             "message": "分析完成",
         }
 

@@ -5,10 +5,12 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -16,11 +18,14 @@ from PyQt6.QtWidgets import (
 )
 
 from engine import config
+from engine.log import get_logger
 from engine.store import PhotoStore
 from .pages.analyze_page import AnalyzePage
 from .pages.export_page import ExportPage
 from .pages.import_page import ImportPage
 from .pages.review_page import ReviewPage
+
+_log = get_logger("ui.main")
 
 
 STAGES = (
@@ -60,9 +65,28 @@ class MainWindow(QMainWindow):
             header_layout.addWidget(button)
             self.stage_buttons.append(button)
         root_layout.addWidget(header)
+        state_row = QHBoxLayout()
         self.stage_state_label = QLabel()
         self.stage_state_label.setObjectName("StageState")
-        root_layout.addWidget(self.stage_state_label)
+        state_row.addWidget(self.stage_state_label)
+        state_row.addStretch(1)
+        # 【v0.6 S4-1 / G4】项目级兜底入口：旧库升级说明 + 已复核清单导出。
+        # 两者都放在状态行而非弹窗自动弹出 —— 启动时不阻塞用户，
+        # 需要时一点即得（旧库提示按钮只在确实检测到旧库时才出现）。
+        self.upgrade_button = QPushButton("旧库升级说明")
+        self.upgrade_button.setObjectName("UpgradeNotice")
+        self.upgrade_button.clicked.connect(self.show_upgrade_notice)
+        self.upgrade_button.setVisible(False)
+        state_row.addWidget(self.upgrade_button)
+        self.decisions_export_button = QPushButton("导出已复核清单")
+        self.decisions_export_button.setObjectName("ExportDecisions")
+        self.decisions_export_button.setToolTip(
+            "把人工标星/保留排除/人工场景导出为 CSV 兜底清单"
+            "（库文件损坏或被误删时仍能查到自己做过什么）"
+        )
+        self.decisions_export_button.clicked.connect(lambda: self.export_review_list())
+        state_row.addWidget(self.decisions_export_button)
+        root_layout.addLayout(state_row)
 
         self.stack = QStackedWidget()
         self.import_page = ImportPage()
@@ -86,6 +110,7 @@ class MainWindow(QMainWindow):
         self.analyze_page.failed.connect(self.show_error)
         self.analyze_page.cancelled.connect(lambda: self.status("分析已取消"))
         self.goto("import")
+        self.refresh_upgrade_notice()
 
     @property
     def current_page(self) -> QWidget:
@@ -126,17 +151,87 @@ class MainWindow(QMainWindow):
 
     def _analysis_succeeded(self, result: dict) -> None:
         self.goto("review")
+        # 重算之后旧后端记录已被覆盖：顺手刷新"旧库"入口，别让提示一直挂着。
+        self.refresh_upgrade_notice(announce=False)
         degradations = result.get("degradations") or []
-        if not degradations:
-            self.status(f"分析完成：{result.get('total', 0)} 张，等待人工复核")
+        upgrade = result.get("upgrade") or {}
+        details: list[str] = []
+        if upgrade.get("recomputed"):
+            # 【v0.6 S4-1 / G4】重算必须说清楚：否则用户只会看到"分数换了一套"
+            # 却不知道为什么，也无从确认自己的复核有没有被保住。
+            legacy = upgrade.get("legacy_backends") or []
+            origin = f"（原后端：{'、'.join(legacy)}）" if legacy else ""
+            details.append(
+                f"模型已更新，指标已重算{origin}；"
+                f"人工复核 {upgrade.get('decisions_preserved', 0)} 条已保留"
+            )
+        if degradations:
+            # 【v0.6 S2-2 / G3】降级必须对用户可见：否则用户会以为"AI 都算过了"，
+            # 实际少了美学/场景这一半信号，却拿着一份看起来完全正常的甄选结果。
+            first = degradations[0]
+            detail = f"{first.get('stage', '未知阶段')}：{first.get('effect', '')}"
+            if len(degradations) > 1:
+                detail += f"（另有 {len(degradations) - 1} 项降级）"
+            details.append(f"降级 · {detail}")
+        head = "分析完成（降级）" if degradations else "分析完成"
+        message = f"{head}：{result.get('total', 0)} 张"
+        message += " · " + " · ".join(details) if details else "，等待人工复核"
+        self.status(message)
+
+    # ------------------------------------------------------------------
+    # 【v0.6 S4-1 / G4】旧库升级提示 + 已复核清单导出（兜底）
+    # ------------------------------------------------------------------
+    def upgrade_report(self) -> dict:
+        """读取本项目的旧库升级信息（读失败不阻断启动）。"""
+        try:
+            return self.store.upgrade_report()
+        except Exception as error:          # noqa: BLE001 —— 提示失败不该拦住用户
+            _log.warning("读取旧库升级信息失败（已忽略）：%s", error)
+            return {}
+
+    def refresh_upgrade_notice(self, *, announce: bool = True) -> None:
+        """检测到旧库才显示升级入口，避免给新用户一个纯噪音按钮。"""
+        report = self.upgrade_report()
+        needs_attention = bool(report.get("needs_attention"))
+        self.upgrade_button.setVisible(needs_attention)
+        if needs_attention and announce:
+            self.status("检测到旧项目：点「旧库升级说明」查看升级、备份与重算详情")
+
+    def show_upgrade_notice(self) -> None:
+        report = self.upgrade_report()
+        if not report.get("needs_attention"):
+            self.status("项目为当前版本，无需升级")
             return
-        # 【v0.6 S2-2 / G3】降级必须对用户可见：否则用户会以为"AI 都算过了"，
-        # 实际少了美学/场景这一半信号，却拿着一份看起来完全正常的甄选结果。
-        first = degradations[0]
-        detail = f"{first.get('stage', '未知阶段')}：{first.get('effect', '')}"
-        if len(degradations) > 1:
-            detail += f"（另有 {len(degradations) - 1} 项降级）"
-        self.status(f"分析完成（降级）：{result.get('total', 0)} 张 · {detail}")
+        box = QMessageBox(self)
+        box.setWindowTitle("旧项目升级说明")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(self.store.upgrade_summary())
+        box.setInformativeText(
+            "人工复核结果不会丢失（备份也留在原项目旁）；指标会在下次分析时重算。"
+        )
+        export = box.addButton("导出已复核清单", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("知道了", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if box.clickedButton() is export:
+            self.export_review_list()
+
+    def export_review_list(self, target: str | None = None) -> None:
+        """导出人工复核清单（CSV）。target 为空时弹保存对话框。"""
+        if target is None:
+            default = str(Path(self.store.db_path).with_name("已复核清单.csv"))
+            chosen, _ = QFileDialog.getSaveFileName(
+                self, "导出已复核清单", default, "CSV 文件 (*.csv)"
+            )
+            if not chosen:
+                return
+            target = chosen
+        try:
+            result = self.store.export_decisions(target)
+        except Exception as error:          # noqa: BLE001
+            _log.exception("导出已复核清单失败：%s", target)
+            self.show_error(f"导出已复核清单失败：{error}")
+            return
+        self.status(f"已导出 {result['rows']} 条人工复核记录 → {result['path']}")
 
     def status(self, message: str) -> None:
         self.statusBar().showMessage(message)

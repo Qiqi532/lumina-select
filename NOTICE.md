@@ -9,11 +9,15 @@ Qt 组件、ExifTool 和模型权重仍受各自条款约束；自动检查是�
   技术质量评分路径和 PyInstaller hidden imports 中移除 pyiqa；`release/license-policy.toml`
   将其列为 `deny_packages`，发行包不得包含其代码或权重。
 - **本项目自 v0.6 起只发行一个版本**（标准版 Torch/CLIP/ViT）。轻量版（OpenCV 启发式后端）
-  及其独立安装器已删除，因此不再存在"两版许可清单"。
+  及其独立安装器已删除，因此不再存在"两版许可清单"；轻量依赖锁
+  `requirements-lightweight.txt` 与 `requirements/lightweight.in` 同步删除，现在只有
+  `requirements.txt` 一份锁定清单供本文件的清单生成使用。
 - PyQt6、PyQt6-Qt6 与 PyQt6-sip 属于人工复核包。没有真实、可审计的商业许可或
   GPLv3 兼容发行决定时，只能生成清晰标记的开发候选包，不得声称正式发布完成。
 - 精确 Python 包版本和安装元数据由 `scripts/check_release_licenses.py` 生成到
   `THIRD_PARTY_NOTICES.md`。正式发布还必须通过该脚本的 `--release` 门禁。
+  v0.6 收口时的开发检查结果：**67 packages 通过，`pyiqa` 缺席**，清单重新生成后与
+  仓库内 `THIRD_PARTY_NOTICES.md` **逐字节一致**（即清单没有滞后于锁定依赖）。
 
 ## 随项目使用的模型与原生组件
 

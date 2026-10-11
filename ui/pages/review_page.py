@@ -69,7 +69,14 @@ class ReviewPage(QWidget):
         middle_layout.addWidget(self.filmstrip)
         footer = QHBoxLayout()
         self.progress_label = QLabel("0 / 0")
-        self.hint_label = QLabel("P 保留 · X 排除 · 0–5 星 · A–D 候选 · ←/→ 导航 · Ctrl+Z 撤销")
+        # 【v0.6 S3-4 / P1-8】提示要把「星级与 P/X 的联动规则」说清楚，否则用户
+        # 会以为星级与保留/排除互不影响，从而留下「0 星却已被保留」这类矛盾态。
+        self.hint_label = QLabel("P 保留 · X 排除 · 0–5 星（0 星取消保留，给星撤回排除）· A–D 候选 · ←/→ 导航 · Ctrl+Z 撤销")
+        self.hint_label.setToolTip(
+            "P = 保留（记 5 星）；X = 排除（记 0 星）。\n"
+            "把星级改成 0 会取消「保留」；给 1 星以上会撤回「排除」。\n"
+            "只有被保留或达到最低星级的照片才会进入交付。"
+        )
         self.confirm_button = QPushButton("确认并进入下一组")
         self.confirm_button.setObjectName("Primary")
         self.confirm_button.clicked.connect(self._next_group)
@@ -162,6 +169,13 @@ class ReviewPage(QWidget):
         if current is None:
             return
         group_id = current.group_id
+        # 【v0.6 S3-5 / P1-10】无分组的照片本身就是「一组」，不能再沿 group_id == None
+        # 连续往后跳。旧实现会把 [独立A, 独立B, 独立C, 分组X] 从 A 直接跳到 X，
+        # 让 B/C 完全被跳过。
+        if group_id is None:
+            self.review.next()
+            self.refresh()
+            return
         while self.review.next() is not None:
             next_item = self.review.current
             if next_item.asset_id == current.asset_id or next_item.group_id != group_id:

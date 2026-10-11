@@ -12,6 +12,10 @@ from PyQt6.QtWidgets import QListView, QStyle, QStyledItemDelegate
 
 from services.review_service import ReviewItem
 from ui.theme import COLORS
+from engine.log import get_logger
+
+# 【v0.6 S3-8】缩略图加载失败不再静默（理由同 ui/review/canvas.py）。
+_log = get_logger("ui.filmstrip")
 
 
 def _load_qimage(path: str) -> QImage:
@@ -124,6 +128,7 @@ class FilmstripModel(QAbstractListModel):
             except CancelledError:
                 return
             except Exception:
+                _log.exception("缩略图加载失败（按空图显示）：%s", item.preview_path)
                 image = QImage()
             if not self._closed:
                 self.thumbnail_finished.emit(generation, asset_id, image)

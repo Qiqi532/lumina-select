@@ -15,6 +15,11 @@ from PyQt6.QtWidgets import (
 )
 
 from services.review_service import ReviewItem, ViewMode
+from engine.log import get_logger
+
+# 【v0.6 S3-8】把"图片解码失败"留在日志里：旧实现只把失败悄悄换成一张空图，
+# 界面上是纯黑预览、日志里什么都没有，事后完全无法定位是哪张图/什么原因。
+_log = get_logger("ui.canvas")
 
 
 def _load_large_qimage(path: str) -> QImage:
@@ -207,6 +212,8 @@ class CanvasWidget(QWidget):
             except CancelledError:
                 return
             except Exception:
+                # 【v0.6 S3-8】降级为空图但不静默：留下可定位的 traceback。
+                _log.exception("预览图解码失败（按空图显示）：%s", item.preview_path)
                 image = QImage()
             if not self._closed:
                 self.image_finished.emit(generation, asset_id, image)

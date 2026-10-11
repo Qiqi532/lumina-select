@@ -33,7 +33,7 @@ def _populate(store: PhotoStore):
                 "is_waste": waste,
                 "label": label,
                 "decision_source": "manual" if label else None,
-                "analysis_backend": "heuristic",
+                "analysis_backend": "torch",
             }
         )
     store.set_group(1, 2, "/photos/IMG_A.CR3", is_uncertain=True, n_candidates=2)
@@ -160,4 +160,51 @@ def test_late_preview_from_previous_generation_cannot_replace_new_project(qtbot,
     finally:
         release_old.set()
         canvas.close()
+        store.close()
+
+
+# ---------------------------------------------------------------------------
+# v0.6 S3-5 / P1-10：「下一组」不得跳过连续的无分组照片
+# ---------------------------------------------------------------------------
+
+def test_next_group_does_not_skip_consecutive_ungrouped_photos(qtbot, tmp_path):
+    """[独立A, 独立B, 独立C, 分组X] 下按「下一组」应走到 B，而不是直接跳到 X。"""
+    store = PhotoStore(str(tmp_path / "review.db"), enable_wal=False)
+    for name in ("A.CR3", "B.CR3", "C.CR3"):
+        store.upsert_photo(
+            {
+                "path": f"/photos/{name}",
+                "fname": name,
+                "asset_pair_id": f"solo-{name}",
+                "asset_role": "raw",
+                "group_id": None,
+                "is_candidate": 0,
+            }
+        )
+    for name, rank in (("X1.CR3", 1), ("X2.CR3", 2)):
+        store.upsert_photo(
+            {
+                "path": f"/photos/{name}",
+                "fname": name,
+                "asset_pair_id": f"pair-{name}",
+                "asset_role": "raw",
+                "group_id": 9,
+                "is_candidate": 1,
+                "candidate_rank": rank,
+            }
+        )
+    store.set_group(9, 2, "/photos/X1.CR3", is_uncertain=False, n_candidates=2)
+    page = ReviewPage(store, image_loader=_image, thumbnail_loader=_image)
+    qtbot.addWidget(page)
+    try:
+        page.review.focus("solo-A.CR3")
+        page.refresh()
+        order = [item.asset_id for item in page.review.queue]
+        assert order[:3] == ["solo-A.CR3", "solo-B.CR3", "solo-C.CR3"]
+
+        page.confirm_button.click()          # 触发「确认并进入下一组」
+        assert page.review.current.asset_id == order[1]
+        assert page.review.current.asset_id != "pair-X1.CR3"
+    finally:
+        page.shutdown()
         store.close()

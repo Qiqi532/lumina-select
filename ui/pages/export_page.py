@@ -21,9 +21,13 @@ from PyQt6.QtWidgets import (
 )
 
 from engine.store import PhotoStore
+from engine.log import get_logger
 from services.asset_pairing import AssetPair, assets_from_rows
 from services.export_service import ExportPlan, ExportRequest, ExportService
 from services.metadata_writer import MetadataWriter
+
+# 【v0.6 S3-8】导出 worker 的异常同样只传了一行文案给界面，这里补 traceback。
+_log = get_logger("ui.export")
 
 
 MODE_LABELS = {
@@ -90,6 +94,7 @@ class ExportWorker(QThread):
                     )
             self.completed.emit(tuple(results))
         except Exception as error:
+            _log.exception("导出失败（目标 %s）：%s", self.request.target_dir, error)
             self.failed.emit(str(error))
 
 

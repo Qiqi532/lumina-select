@@ -212,11 +212,32 @@ def _detect_landmarks(rgb: np.ndarray) -> list | None:
     return [[(p.x, p.y) for p in lm.landmark] for lm in res.multi_face_landmarks]
 
 
-def _ear(pts) -> float:
-    """计算单个眼睛的纵横比（EAR）。pts 为 6 个关键点（x, y 归一化坐标）。"""
+def _ear(pts, size: tuple[int, int] | None = None) -> float:
+    """计算单个眼睛的纵横比（EAR）。pts 为 6 个关键点。
+
+    【v0.6 S3-1 / P1-3】EAR 是「垂直距离 / 水平距离」的**比值**，只有把关键点
+    还原到**像素口径**才有物理意义。MediaPipe 给的是归一化坐标 ``(x/w, y/h)``：
+    在非方图上直接按归一化坐标相除，会把横向与纵向两个不同的缩放混进同一个比值
+    —— 同一张脸在 3:2 与 2:3 画幅下会算出**不同的 EAR**，让 ``EAR_CLOSED_THRESHOLD``
+    这类绝对值阈值失去可比性（横构图会被系统性高估、竖构图被低估）。
+
+    参数
+    ----
+    pts : 6 个 ``(x, y)`` 关键点，**归一化坐标**（MediaPipe 原生输出）
+    size : ``(w, h)`` 像素尺寸。生产调用**必须传**；传 ``None`` 时退化为归一化口径
+           （仅为不关心画幅比的纯数学场景保留，非方图上结果会被画幅比污染）
+    """
+    if size is None:
+        w = h = 1.0
+    else:
+        w, h = float(size[0]), float(size[1])
+
     def d(a: int, b: int) -> float:
         p1, p2 = pts[a], pts[b]
-        return ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
+        dx = (p1[0] - p2[0]) * w
+        dy = (p1[1] - p2[1]) * h
+        return (dx * dx + dy * dy) ** 0.5
+
     left = (d(160, 144) + d(158, 153)) / (2 * d(33, 133) + 1e-9)
     right = (d(385, 380) + d(387, 373)) / (2 * d(362, 263) + 1e-9)
     return float((left + right) / 2)
@@ -247,7 +268,9 @@ def detect_face_ear(rgb: np.ndarray, ear_threshold: float = EAR_CLOSED_THRESHOLD
         return result
     result["is_face"] = True
     result["num_faces"] = len(landmarks)
-    ears = [_ear(pts) for pts in landmarks]
+    # 【v0.6 S3-1】按像素口径算 EAR，避免非方图画幅比污染比值
+    height, width = rgb.shape[:2]
+    ears = [_ear(pts, (width, height)) for pts in landmarks]
     result["ear"] = min(ears) if ears else None
     result["eyes_closed"] = (result["ear"] is not None and result["ear"] < ear_threshold)
     return result
@@ -260,6 +283,8 @@ def detect_face_ear(rgb: np.ndarray, ear_threshold: float = EAR_CLOSED_THRESHOLD
 _eye_model = None
 _eye_proc = None
 _eye_dev = None
+# 【v0.6 S3-6 / P1-12】分类器失败只需提示一次（旧实现每张照片刷一条 warning）
+_eye_failure_reported = False
 
 
 def _get_eye_classifier():
@@ -270,7 +295,7 @@ def _get_eye_classifier():
     不完整快照）就抛异常，而异常被上层吞掉后仅写一行 warning——用户毫无感知，
     实际却退化成了"只有 EAR"的单信号判定。
     """
-    global _eye_model, _eye_proc, _eye_dev
+    global _eye_model, _eye_proc, _eye_dev, _eye_failure_reported
     if _eye_model is not None:
         return _eye_model, _eye_proc, _eye_dev
     from . import models_guard
@@ -281,12 +306,30 @@ def _get_eye_classifier():
     from transformers import AutoImageProcessor, AutoModelForImageClassification
 
     kwargs = {}
-    if models_guard.offline_local_files_only():
+    # 【v0.6 S2-2 / G3】本地快照完整 ⇒ 直接以该目录为加载源（理由同 aesthetics.get_clip）
+    local = models_guard.local_model_source(EYE_MODEL_NAME)
+    source = local or EYE_MODEL_NAME
+    if local or models_guard.offline_local_files_only():
         kwargs["local_files_only"] = True
-    _eye_proc = AutoImageProcessor.from_pretrained(EYE_MODEL_NAME, **kwargs)
-    _eye_model = AutoModelForImageClassification.from_pretrained(EYE_MODEL_NAME, **kwargs)
+    _eye_proc = AutoImageProcessor.from_pretrained(source, **kwargs)
+    _eye_model = AutoModelForImageClassification.from_pretrained(source, **kwargs)
     _eye_dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _eye_model.to(_eye_dev).eval()
+    try:
+        _eye_model.to(_eye_dev).eval()
+    except Exception as error:  # noqa: BLE001 —— CUDA OOM / 驱动异常
+        # 【v0.6 S3-6 / P1-11】旧实现让 .to(cuda) 的异常直接冒出，分类器永久不可用；
+        # 现在回退 CPU 并作为降级事件上报，用户可在分析汇总里看到。
+        _log.warning("闭眼分类器迁移到 %s 失败，回退 CPU：%s", _eye_dev, error)
+        _eye_dev = torch.device("cpu")
+        _eye_model.to(_eye_dev).eval()
+        from . import degradations
+
+        degradations.record(
+            "闭眼分类器",
+            f"{type(error).__name__}: {error}",
+            "闭眼 ViT 改用 CPU 推理；结果一致但更慢",
+        )
+    _eye_failure_reported = False      # 加载成功 ⇒ 允许下次故障重新提示一次
     return _eye_model, _eye_proc, _eye_dev
 
 
@@ -308,6 +351,7 @@ def eye_close_probability(pil_img, landmarks) -> float:
     pil_img: PIL RGB 原图；landmarks: 单脸的 478 个 (x,y) 归一化关键点。
     模型不可用/异常返回 None（调用方按仅 EAR 处理）。
     """
+    global _eye_failure_reported
     try:
         import torch
         model, proc, dev = _get_eye_classifier()
@@ -322,7 +366,19 @@ def eye_close_probability(pil_img, landmarks) -> float:
             probs.append(float(p[0].item()))   # id2label[0] = 'closeEye'
         return max(probs) if probs else None
     except Exception as e:
-        _log.warning("闭眼分类器运行失败（按仅 EAR）：%s", e)
+        # 【v0.6 S3-6 / P1-12】旧实现每张照片都刷一条 warning（数千行日志把日志文件
+        # 灌满，真正的问题反而被淹没）。改为每次故障只报**一次**：一条 warning +
+        # 一条降级事件，让用户知道本次闭眼判定退化成了「只用 EAR 几何信号」。
+        if not _eye_failure_reported:
+            _eye_failure_reported = True
+            _log.warning("闭眼分类器运行失败（本次分析后续按仅 EAR）：%s", e)
+            from . import degradations
+
+            degradations.record(
+                "闭眼分类器",
+                f"{type(e).__name__}: {e}",
+                "本次闭眼判定只用 EAR 几何信号；分类器恢复后重跑会自动补齐",
+            )
         return None
 
 
@@ -365,7 +421,9 @@ def detect_face_and_eyes(rgb: np.ndarray, pil_img=None,
 
     result["is_face"] = True
     result["num_faces"] = len(landmarks)
-    ears = [_ear(pts) for pts in landmarks]
+    # 【v0.6 S3-1】同 detect_face_ear：EAR 必须用像素口径
+    height, width = rgb.shape[:2]
+    ears = [_ear(pts, (width, height)) for pts in landmarks]
     regions = [_face_region(rgb, index, points, ears[index])
                for index, points in enumerate(landmarks)]
     result["regions"] = regions
@@ -373,8 +431,6 @@ def detect_face_and_eyes(rgb: np.ndarray, pil_img=None,
     result["eyes_closed"] = (result["ear"] is not None and result["ear"] < ear_threshold)
     if result["eyes_closed"]:
         return result                       # EAR 已判闭眼 → 无需分类器
-    if config.INFERENCE_BACKEND == "heuristic":
-        return result                       # 轻量版只用本地 EAR，不加载 ViT
 
     ear = result["ear"]
     if ear is None or not (EYE_MODEL_EAR_LO <= ear <= EYE_MODEL_EAR_HI):

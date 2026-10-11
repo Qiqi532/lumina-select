@@ -63,16 +63,12 @@ BRISQUE_ANALYZE_SIZE = 512     # BRISQUE 输入尺寸
 BRISQUE_SATURATED = 80.0       # BRISQUE ≥80 高度怀疑非自然内容（插画/截图）→ 中性化保护
 BRISQUE_WASTE_THRESHOLD = 50.0 # BRISQUE > 50 视为严重失真（仅作评分参考，不作废片触发源）
 
-# --- 【轻量化 Phase 0/1】推理后端选择（见 engine/inference.py）-------------------
-# 把"需要 torch/transformers 的深度学习推理"从流水线里隔离出来。
-#   "torch"      ：默认后端，CLIP/ViT + OpenCV 技术质量评分，精度最高
-#   "heuristic"  ：轻量后端，纯 OpenCV + numpy 启发式，**无 torch / 无模型下载 / 完全离线**，
-#                  用于"轻量桌面版"分发（exe 去掉 torch 后约 150MB、秒级启动）；
-#                  画质/美学分精度低于深度学习模型，由人工复核环节兜底。
-# 切换后端只需改这一行（或轻量打包时用 runtime hook 注入），pipeline / scorer 等业务代码无需改动。
-# 注意：切换后端会令 ai_models 签名变化 → 已分析库自动全量重算（见 pipeline._ai_model_signature）。
-# 也可用环境变量 LUMINA_INFERENCE_BACKEND 覆盖（轻量打包的 runtime hook 即用它注入 "heuristic"）。
-INFERENCE_BACKEND = os.environ.get("LUMINA_INFERENCE_BACKEND", "torch")
+# --- 【v0.6 S2-1】推理后端选择已移除 --------------------------------------
+# 旧配置（INFERENCE_BACKEND / 环境变量 LUMINA_INFERENCE_BACKEND）在 v0.6 删除：
+#   本项目自 v0.6 起只发行标准版（Torch CLIP/ViT），轻量 heuristic 后端与
+#   双版本机制一并下线。后端现在是**调用参数**（analyze_directory(..., backend=...)），
+#   默认值唯一来源是 engine/inference.py::DEFAULT_BACKEND，不再放在 config 里 ——
+#   用全局配置切换后端会让"谁改了后端"不可追踪，历史上已因此丢过人工复核数据。
 
 # --- 【模型升级 v0.4】美学模型（真实照片优先）-------------------------------
 # 注意：musiq-ava 作为美学模型目前是【预留配置，尚未接入】—— aesthetics.py 当前

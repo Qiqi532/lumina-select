@@ -100,3 +100,27 @@ def test_close_cancels_and_waits_for_running_worker(qtbot, tmp_path):
     window.analyze_page.worker = worker
     window.close()
     assert worker.cancelled and worker.waited
+
+
+# ---------------------------------------------------------------------------
+# 【v0.6 S3-8】worker 异常不得"只传一行文案给界面"
+# ---------------------------------------------------------------------------
+def test_analyze_worker_failure_is_logged_with_traceback(monkeypatch, caplog):
+    """界面拿到 str(error) 就够用户读，但事后复盘需要完整 traceback 落在日志里。"""
+    from engine import pipeline
+
+    def boom(source, db_path, **kwargs):      # noqa: ARG001
+        raise RuntimeError("no space left on device")
+
+    monkeypatch.setattr(pipeline, "analyze_directory", boom)
+    worker = AnalyzeWorker("C:/photos", "C:/project.db")
+    seen = []
+    worker.failed.connect(seen.append)
+
+    with caplog.at_level("ERROR"):
+        worker.run()
+
+    assert seen == ["no space left on device"], "界面仍应拿到一行可读文案"
+    assert "分析失败" in caplog.text
+    assert "no space left on device" in caplog.text
+    assert "Traceback" in caplog.text, "缺少 traceback ⇒ 出问题后无法定位"

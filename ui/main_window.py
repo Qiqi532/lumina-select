@@ -109,6 +109,13 @@ class MainWindow(QMainWindow):
         self.stage_state_label.setText(f"当前：{STAGES[current_index][1]} · 项目已保存")
 
     def begin_analysis(self, source: str) -> None:
+        # 【v0.6 S3-5 / P1-9】分析进行中再次触发（重复点选目录、双击）不得让
+        # AnalyzePage.start() 的 RuntimeError 冒到 Qt 事件循环里 —— 旧实现下
+        # 用户看不到任何提示，而 goto("analyze") 已经切走了页面。
+        worker = self.analyze_page.worker
+        if worker is not None and worker.isRunning():
+            self.status("分析正在进行中，请等待完成或先取消后再更换目录")
+            return
         source_path = Path(source)
         if not source_path.is_dir():
             self.show_error("请选择存在的照片目录")
@@ -119,7 +126,17 @@ class MainWindow(QMainWindow):
 
     def _analysis_succeeded(self, result: dict) -> None:
         self.goto("review")
-        self.status(f"分析完成：{result.get('total', 0)} 张，等待人工复核")
+        degradations = result.get("degradations") or []
+        if not degradations:
+            self.status(f"分析完成：{result.get('total', 0)} 张，等待人工复核")
+            return
+        # 【v0.6 S2-2 / G3】降级必须对用户可见：否则用户会以为"AI 都算过了"，
+        # 实际少了美学/场景这一半信号，却拿着一份看起来完全正常的甄选结果。
+        first = degradations[0]
+        detail = f"{first.get('stage', '未知阶段')}：{first.get('effect', '')}"
+        if len(degradations) > 1:
+            detail += f"（另有 {len(degradations) - 1} 项降级）"
+        self.status(f"分析完成（降级）：{result.get('total', 0)} 张 · {detail}")
 
     def status(self, message: str) -> None:
         self.statusBar().showMessage(message)

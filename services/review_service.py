@@ -246,6 +246,19 @@ class ReviewService:
             self._undo_stack.pop(0)
         self.reload()
 
+    # ------------------------------------------------------------------
+    # 产品规则（v0.6 S3-4 / P1-8）
+    # ------------------------------------------------------------------
+    # P / X 是**主决策**，星级是同一决策上的 1–5 级细分评价；两者必须保持一致，
+    # 否则会出现自相矛盾的状态 —— 旧实现允许「0 星却仍挂着 P，并因此被导出」。
+    #
+    #   · P  = 选片 → star 记 5
+    #   · X  = 弃选 → star 记 0
+    #   · set_star(0)    → 清掉 P（0 星不再是"选片"，杜绝「0 星却被导出」）
+    #   · set_star(n>=1) → 撤回 X（重新给星即不再弃选，杜绝「有星却不导出」）
+    #
+    # 导出侧口径见 services/export_service.ExportService._asset_problem：
+    #   已复核 且 label != "X" 且 (label == "P" 或 star >= min_star)
     def decide(self, key: str) -> None:
         if key not in {"P", "X"}:
             raise ValueError(f"unsupported decision: {key}")
@@ -255,8 +268,15 @@ class ReviewService:
         if not 0 <= star <= 5:
             raise ValueError("star must be between 0 and 5")
         current = self.current
-        if current is not None:
-            self._apply(star=star, label=current.label)
+        if current is None:
+            return
+        label = current.label
+        if star == 0:
+            if label == "P":
+                label = None
+        elif label == "X":
+            label = None
+        self._apply(star=star, label=label)
 
     def undo(self) -> bool:
         if not self._undo_stack:

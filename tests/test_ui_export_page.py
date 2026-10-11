@@ -195,3 +195,29 @@ def test_rejected_close_keeps_review_workspace_alive(qtbot, tmp_path):
     assert window.review_page._stopped is False
     window.export_page.worker = None
     window.close()
+
+
+def test_export_worker_failure_is_logged_with_traceback(qtbot, tmp_path, monkeypatch, caplog):
+    """【v0.6 S3-8】导出 worker 异常：界面一行文案 + 日志完整 traceback。"""
+    from services.export_service import ExportService
+
+    store, assets = _setup(tmp_path, names=("IMG_0001.CR3",))
+    page = ExportPage(store, assets=assets)
+    qtbot.addWidget(page)
+    page.target_edit.setText(str(tmp_path / "delivery"))
+    page.asset_mode_combo.setCurrentText("仅 RAW")
+
+    def boom(self, request, progress=None, cancel_check=None):   # noqa: ARG001
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(ExportService, "run", boom)
+    try:
+        with caplog.at_level("ERROR"):
+            with qtbot.waitSignal(page.export_finished, timeout=5000):
+                page.start_export()
+        assert "导出失败" in caplog.text
+        assert "disk on fire" in caplog.text
+        assert "Traceback" in caplog.text
+    finally:
+        page.shutdown()
+        store.close()

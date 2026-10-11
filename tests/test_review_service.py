@@ -165,3 +165,57 @@ def test_undo_restores_every_member_and_each_consecutive_operation(tmp_path):
         assert service.undo() is False
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# v0.6 S3-4 / P1-8：星级与 P/X 必须保持一致，不得出现「0 星却会导出」
+# ---------------------------------------------------------------------------
+
+def test_zero_star_clears_pick(tmp_path):
+    """0 星必须取消「保留」，否则会留下「0 星却仍被导出」的矛盾态。"""
+    store = _store(tmp_path)
+    try:
+        service = ReviewService(store)
+        service.focus("pair-a")
+        service.decide("P")
+        assert store.get_photo("/photos/a.CR3")["label"] == "P"
+
+        service.set_star(0)
+        for path in ("/photos/a.CR3", "/photos/a.JPG"):
+            row = store.get_photo(path)
+            assert row["star"] == 0
+            assert row["label"] is None
+    finally:
+        store.close()
+
+
+def test_star_above_zero_withdraws_reject(tmp_path):
+    """重新给星必须撤回「排除」，否则会留下「有星却不导出」的矛盾态。"""
+    store = _store(tmp_path)
+    try:
+        service = ReviewService(store)
+        service.focus("pair-a")
+        service.decide("X")
+        assert store.get_photo("/photos/a.CR3")["label"] == "X"
+
+        service.set_star(3)
+        for path in ("/photos/a.CR3", "/photos/a.JPG"):
+            row = store.get_photo(path)
+            assert row["star"] == 3
+            assert row["label"] is None
+    finally:
+        store.close()
+
+
+def test_nonzero_star_keeps_pick_label(tmp_path):
+    """非 0 星只是 P 的细分，不得清掉 P。"""
+    store = _store(tmp_path)
+    try:
+        service = ReviewService(store)
+        service.focus("pair-a")
+        service.decide("P")
+        service.set_star(2)
+        row = store.get_photo("/photos/a.CR3")
+        assert (row["star"], row["label"]) == (2, "P")
+    finally:
+        store.close()

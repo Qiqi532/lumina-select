@@ -28,7 +28,8 @@ if not exist "%PY%" (
 "%PY%" scripts\verify_exiftool.py
 if errorlevel 1 exit /b 1
 set "QT_QPA_PLATFORM=offscreen"
-set "LUMINA_INFERENCE_BACKEND=heuristic"
+rem 【v0.6 S2-1】此处原有一行 set "LUMINA_INFERENCE_BACKEND=heuristic"。
+rem 该开关与轻量后端已一并删除；本项目只发行 Torch 标准版。
 "%PY%" -m pytest -q -o addopts=
 if errorlevel 1 exit /b 1
 "%PY%" scripts\check_release_licenses.py --requirements requirements.txt --policy release\license-policy.toml

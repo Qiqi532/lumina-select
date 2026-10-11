@@ -234,6 +234,26 @@ def has_local_snapshot(repo_id: str) -> str | None:
     return None
 
 
+def local_model_source(repo_id: str) -> str | None:
+    """本地已有**完整**快照时返回其目录，否则 None —— 调用方应**直接用它去加载**。
+
+    为什么不只是"加 `local_files_only=True`、让 HF 自己解析缓存目录"：
+
+      1) **时序脆弱**：huggingface_hub 在 **import 时**就把 `HF_HUB_CACHE` 算成模块常量。
+         若它在 `apply_env()` 之前被 import（测试、第三方库或将来有人在模块顶层
+         `import transformers` 都会触发），之后再设置环境变量**不再生效** —— 表现是
+         "项目内 `.hf_cache` 里明明有模型，程序却去 `~/.cache/huggingface` 找并失败"。
+         本项目在 S2-2 的测试里实测复现过这一条。
+      2) **性能**：网络可达时 `from_pretrained` 仍会做 HEAD/etag 往返，抖动重试能把一次
+         CLIP 加载从 ~15s 拖到 **499s**（实测）。
+      3) **稳定性**：模型 ID 未锁修订，联网会让权重在用户无感知的情况下漂移，而
+         `_ai_model_signature()` 含模型名 → 漂移触发全库重算，正是 P0-1 的雷区。
+
+    显式给出目录可一次解决以上三条，并完全摆脱缓存环境变量的时序依赖。
+    """
+    return has_local_snapshot(repo_id)
+
+
 def offline_local_files_only() -> bool:
     """是否应强制本地加载（config.OFFLINE_FIRST 且确实处于离线/受限网络）。"""
     if not config.OFFLINE_FIRST:

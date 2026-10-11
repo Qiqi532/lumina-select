@@ -16,6 +16,8 @@ pycache/
 # ---- 虚拟环境 / 缓存（不落仓库）----
 .venv/
 .venv-cpu/
+# 轻量环境已随 v0.6 S2 下线（项目只发行 Torch 标准版）。条目保留只是为了让
+# 本地遗留的 .venv-light/ 目录不污染 git status；确认删除后可一并移除本行。
 .venv-light/
 .pip_cache/
 .hf_cache/
@@ -50,15 +52,15 @@ _srv_err.log
 Thumbs.db
 
 # ---- exe 打包产物（用 build_dist.bat 重新生成）----
+# 【v0.6 S2-1/2/3】轻量版已下线，build_light/ · dist_light/ · Output_light/ 三条
+# 规则与 !光影选片助手_dist_lightweight.spec 例外一并删除：留着它们等于给一个
+# 已不存在的发行版本留后门。
 build/
 build-cpu/
-build_light/
 build-tools/
 dist/
 dist-cpu/
-dist_light/
 Output/
-Output_light/
 release/exiftool/
 release/exiftool-stage-*/
 release/exiftool-13.59_64.zip
@@ -68,6 +70,5 @@ benchmark-*.json
 # 打包态崩溃日志（_install_crash_logger 写到 exe 旁）
 crash.log
 
-# 例外：自包含打包规格是构建必需文件，随仓库分发
+# 例外：自包含打包规格是构建必需文件，随仓库分发（v0.6 起唯一发行规格）
 !光影选片助手_dist.spec
-!光影选片助手_dist_lightweight.spec

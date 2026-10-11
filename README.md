@@ -3,11 +3,39 @@
 本地 AI 智能选片工具：**废片剔除 → 相似分组 → 场景自适应评分 → 最佳帧推荐 → 不确定甄选**，一键导出保留片。
 照片全程本地处理、不上传；GUI 为 **PyQt6 桌面原生窗口**（无浏览器、无参数面板），算法核心在 `engine/`（纯 Python，可独立命令行调试）。
 
-**双版本技术栈**：标准版使用 Torch/CLIP/ViT + OpenCV 技术质量评分；轻量版使用 OpenCV 启发式推理。两版共用 MediaPipe（人脸 / 闭眼）· pHash · SQLite（WAL）· PyQt6，并分别通过 PyInstaller / Inno Setup 独立打包。
+**技术栈**：Torch/CLIP/ViT + OpenCV 技术质量评分，共用 MediaPipe（人脸 / 闭眼）· pHash · SQLite（WAL）· PyQt6，经 PyInstaller / Inno Setup 打包。
+> ✅ v0.5 曾并行维护「标准版（Torch）」与「轻量版（OpenCV 启发式）」两条产品线。**v0.6 已收敛为单一版本，只发行标准版**：轻量后端 `HeuristicBackend`、进程级开关 `config.INFERENCE_BACKEND`、轻量打包四件套与轻量依赖锁**均已删除**——原因与迁移步骤见 `../单版本收敛方案_2026-10-10.md`。
+> 后端现在是**调用参数**、不是进程状态：`analyze_directory(root, db, backend="torch")`，默认值唯一来源为 `engine/inference.py` 的 `DEFAULT_BACKEND`。此举同时消除了 P0-1（切后端静默清空人工复核）的根因。
 
 **关键指标**（RTX 4060 Laptop，1000 张实测）：全流程 63.9 s（验收 ≤5 min）；增量重分析 3.87 s；断点续跑、分块流式内存控制（5000+ 张不爆内存）；pytest 单测 + 端到端冒烟。
 
 > 当前为 v0.5 开发候选，非正式发行。Lightroom 实机验收与 PyQt6/Qt 发行许可人工批准仍待完成；记录表见 `docs/v0.5-manual-acceptance.md`。旧版性能数字仅供历史参考。
+
+---
+
+## 🗺 开发路线图
+
+**当前阶段：v0.6「单版本基线」**——把两条产品线收敛为一条，并清除阻断性缺陷。**该阶段不做任何模型变更。**
+
+| 版本 | 主题 | 目标 | 状态 |
+| --- | --- | --- | --- |
+| **v0.6** | 单版本基线 | 一个版本、一条测试链路、一份文档口径；旧库升级不丢人工决策 | 🚧 进行中（S1 完成 · S2 代码收敛完成） |
+| **v0.7** | 质量线 | **A 线**：嵌入持久化 → 分数校准 → **L3 组内相对排序层**；**B 线**：ONNX 引擎瘦身 → 美学底座影子评测 | 待 v0.6 收尾后展开 |
+| **v0.8** | 个性化 | L4 个人偏好层 + 成对比较界面 + 风格预设 | 远期 |
+
+**完整计划**：`../开发计划_v0.6-v0.8_2026-10-10.md`（rev 2，含分阶段任务、子智能体分工、8 道门禁、风险清单、术语速查）
+
+### 已确认的架构方向（不要与此前方案冲突）
+
+1. **保留深度学习版**：`HeuristicBackend` 无图像嵌入能力，而 L3 排序层与 L4 个性化层都以嵌入为输入，保留轻量版等于锁死路线图。
+2. **问题不在美学模型，而在任务范式**：现状用「单图绝对分的加权和」去解「组内相对排序」，这是本工具推荐质量不理想的根因。v0.7 的核心动作是新增 L3 相对排序层，**优先级高于替换 L2 模型**。
+3. **不引入新的模型家族**：MUSIQ / MANIQA / NIMA 均为 Apache-2.0，但它们是**失真质量模型**（非审美偏好模型），且跨域泛化差（MUSIQ 在 AVA 上 PLCC≈0.738，换到 TAD66K 仅 0.216）。继续留在 transformers 生态内，避免为未验证的收益支付新运行时的维护成本。
+4. **硬性顺序约束**：必须**先修 P0-1（切换后端会静默清空人工复核成果）**，再做任何合并动作。
+5. **A 线先于 B 线**：
+   - **路线 A**（嵌入持久化 + L3 排序层）——改「怎么用分数」。**不触发模型签名变化、不清库，可立即开工**。
+   - **路线 B**（底座 B/32 → B/16）——改「特征从哪来」。触发签名变化，**必须等 P0-1 修完**；且走影子评测门禁，无稳定增益则不换。
+   - 理由：A 的收益上限远高于 B，且 A 建的 L3 模块是 B 收益的「接收器」。
+6. **ONNX 换的是引擎，不是模型**：引擎可从 PyTorch 526.6 MB 降至 ONNX Runtime 18.0 MB；额外可**只导出 CLIP 视觉塔**，再省 42% 模型体积（文本塔 254.1 MB 本项目用不到）。但 ONNX **不提升能力**，只释放体积预算——能力提升来自腾出的空间换来的更强底座。顺序上**先 ONNX、后升底座**。
 
 ---
 
@@ -18,7 +46,7 @@
 | 自动废片剔除 | 模糊（拉普拉斯方差）、过曝/欠曝（直方图占比）、**闭眼**（MediaPipe EAR + ViT 分类器融合）、高度重复 |
 | 相似分组 | EXIF 时间戳连拍分组 + pHash 感知哈希（并查集合并，覆盖跨机位相似） |
 | 场景自适应 | CLIP 分类：人像/风光/建筑/街拍/宠物/静物/其他，不同场景用不同权重 |
-| 画质/美学评分 | 两版共享确定性的 OpenCV 清晰度/曝光/对比度技术评分；标准版使用 LAION 线性头→CLIP 提示词进行美学评分 |
+| 画质/美学评分 | 确定性的 OpenCV 清晰度/曝光/对比度技术评分（`opencv-technical-v1`）+ LAION 线性头→CLIP 提示词美学评分 |
 | 最佳帧推荐 | 组内综合评分（清晰/曝光/美学/人脸），Top1 自动 5 星 |
 | 不确定甄选 | 无明确胜者（分差小/帕累托冲突/场景置信低）时进入人工甄选（A/B/C/D 选择） |
 | Lightroom 交付 | 按 RAW、RAW+JPEG、JPEG 资产模式复制到新目录；相机 RAW 写 XMP sidecar，JPEG/TIFF/PSD/DNG 仅修改导出副本内 XMP；失败可报告和重试 |
@@ -40,7 +68,7 @@ engine/
   log.py               统一日志（控制台 + 文件 smart_cull.log）
   loader.py            目录扫描、JPEG/PNG/RAW 解码、EXIF、缩略图缓存
   quality.py           模糊/曝光兼容接口（委托 OpenCV 技术质量评分）
-  quality_metrics.py   两版共享的 OpenCV 清晰度/曝光/对比度评分
+  quality_metrics.py   OpenCV 清晰度/曝光/对比度技术质量评分（opencv-technical-v1）
   faces.py             MediaPipe 人脸 + 闭眼 EAR + ViT 分类器融合
   aesthetics.py        CLIP 美学评分（LAION-Aesthetics 线性头，GPU 优先）
   scene.py             CLIP 场景分类（人像/风光/其他；调试用，GUI 走 aesthetics 统一调用）
@@ -78,14 +106,6 @@ python -m venv .venv
 
 NVIDIA 用户如需 CUDA 构建，应先按锁定版本选择匹配的 Torch/TorchVision wheel；变更版本必须重新锁定、测试并构建，不能视为与当前候选包等价。
 
-### OpenCV 轻量版：安装与运行
-```bash
-python -m venv .venv-light
-.\.venv-light\Scripts\python.exe -m pip install --cache-dir .pip_cache -r requirements-lightweight.txt
-set LUMINA_INFERENCE_BACKEND=heuristic
-.\.venv-light\Scripts\python.exe app_qt.py
-```
-
 双击 exe 或运行脚本后直接弹出**原生桌面窗口**：选择照片文件夹（原生文件夹对话框）→ 点「开始分析」→ 自动进入复核/导出。
 > 已打包的自包含 exe 见下方「打包成 exe · 方案 A」，双击 `dist\光影选片助手\光影选片助手.exe` 即用，无需 .venv。
 
@@ -98,8 +118,7 @@ set LUMINA_INFERENCE_BACKEND=heuristic
 开发候选包，`--release` 会被拒绝。单独检查可运行：
 
 ```powershell
-.\.venv-light\Scripts\python.exe scripts\verify_exiftool.py
-.\.venv-light\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-light.json
+.\.venv\Scripts\python.exe scripts\verify_exiftool.py
 .\.venv\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-standard.json
 ```
 
@@ -134,36 +153,30 @@ set ZIP=1 & build_dist.bat
 - `rawpy` 未安装时自动跳过 RAW 扩展名，不影响 JPEG/PNG 全流程；
 - 闭眼分类器（dima806）加载失败时自动退化为「仅 EAR」判定。
 
-### 🪶 轻量版（无 torch，推荐普通用户分发）
+### 🔌 离线能力（断网可完成分析）
 
-标准版内嵌 torch / CLIP / ViT，体积较大。**轻量版**把这些深度学习推理
-整体替换为纯 OpenCV 启发式（`engine/inference.py` 的 `HeuristicBackend`），画质/美学/场景
-用图像特征估算，无需下载任何模型权重、完全离线：
+v0.6 把「离线可用」从"看运气"变成了**被测试守住的行为**（门禁 G3）：
 
-```bash
-# 首次构建前创建独立环境（不得复用含 Torch 的 .venv）
-python -m venv .venv-light
-.\.venv-light\Scripts\python.exe -m pip install --cache-dir .pip_cache -r requirements-lightweight.txt
+- **本地权重完整 ⇒ 直接以该快照目录为加载源**（`models_guard.local_model_source()`）。
+  为什么不只是加个 `local_files_only=True`：`huggingface_hub` 在 **import 时**就把
+  `HF_HUB_CACHE` 算成模块常量，若它在 `apply_env()` 之前被 import，之后设置环境变量
+  **不再生效** —— 表现是"项目内 `.hf_cache` 里明明有模型，程序却去 `~/.cache/huggingface`
+  找并失败"（S2-2 在测试里实测复现）。显式给出目录可彻底摆脱这层时序依赖。
+  同时避免 `from_pretrained` 的 HEAD/etag 往返 —— 网络抖动重试会把一次 CLIP 加载从
+  ~15 s 拖到 **499 s**（实测）；也避免模型权重被动漂移（会改 `_ai_model_signature()`
+  → 触发全库重算，正是 P0-1 的雷区）。
+- **阶段二不可用 ⇒ 降级完成，不中断整次分析**。典型场景：外拍现场无网、且从未下载过权重。
+  此时阶段一（质量/哈希/人脸）结果照常落库并完成甄选，只是本次未使用美学/场景信号，
+  并**在状态栏明确告知**（`analyze_directory()` 返回的 `degradations`）。
+- **降级不固化**：美学/场景缺失时**不写入兜底值**（不留 `50.0` / `"其他"`），因此下一轮增量判断
+  仍会认为"缺该项"，模型就绪后重跑会**自动补齐**，无需用户重建项目。
+- 回归证据：`tests/test_pipeline.py`（降级完成 / 降级后自愈）、`tests/test_models_guard.py`
+  （只读本地判定 + 接线）、`data/_offline_probe.py`（断网 + 空缓存探针）、
+  `data/_cache_verify.py`（离线加载全部运行期模型）。
 
-# 一键打包轻量版 onedir
-build_dist_lightweight.bat
-# 可选：构建后额外生成 zip 压缩包
-set ZIP=1 & build_dist_lightweight.bat
-```
-- 产物：`dist_light\光影选片助手\` 文件夹（含 `光影选片助手.exe` + 依赖）。整体拷贝到任意
-  Windows 机器双击即用，**无任何联网/模型下载要求**，秒级启动。
-- 能力对比：模糊 / 曝光 / 重复去重 / 人脸·闭眼（MediaPipe）**与标准版一致**（这些本就不依赖 torch）；
-  画质分、美学分、场景分类改为 OpenCV 启发式，**精度低于深度学习模型**，由「人工复核」环节兜底。
-- 切换开关：`engine/config.py` 的 `INFERENCE_BACKEND`（或环境变量 `LUMINA_INFERENCE_BACKEND`），
-  可选 `torch`（标准，精度高）/ `heuristic`（轻量，离线）。轻量打包由
-  `dist_runtime_hook_light.py` 强制写入 `heuristic`，开发态默认仍为 `torch`。
-- 对应规格：`光影选片助手_dist_lightweight.spec`（排除 torch/transformers/pyiqa，保留 PyQt6/MediaPipe/opencv）。
-- 轻量安装包：用 Inno Setup 编译 `installer_lightweight.iss`，输出到 `Output_light\LuminaSelect-v0.5-lightweight-dev-candidate.exe`；它与标准版独立，可并存安装。
-- **2026-09-07 本机实测**：PyInstaller 6.22.2 最终构建约 97 秒，产物 411.1 MiB / 356 个文件；Inno Setup 安装包 103.4 MiB；
-  不含 torch、transformers、pyiqa、tensorflow、jax、pytest 或 Sphinx。体积主要来自
-  OpenCV-Contrib、MediaPipe FaceMesh、PyQt6 与 ImageHash 所需 SciPy。
-- 真实 MediaPipe 0.10.21 FaceMesh 已在独立 `.venv-light` 中文路径环境中验证；标准版与轻量版使用
-  各自的 ASCII junction，不会跨虚拟环境加载依赖。
+> ⚠️ **模型权重仍不打包**（安装包因此维持约 2 GB）：**首次运行需要联网下载一次**（约 1 GB）。
+> 若要求"全新机器 + 断网首启即可完整分析"，需把权重打进分发包（+约 1 GB）——当前**不做**，
+> 这是刻意的取舍（首次下载体积本身就是离线体验的一部分）。
 
 ### 模型缓存（不落 C 盘）
 首次运行从 HuggingFace Hub 自动下载 CLIP / 闭眼 ViT / MediaPipe 权重，缓存于项目内
@@ -190,15 +203,41 @@ python make_perf_data.py 1000
 # 常规测试（含 quality/similarity/faces/scorer/store/pipeline/发行契约）
 python -m pytest tests
 
-# 两版完整测试（包含默认标记排除的 e2e；不触发模型下载）
+# 完整测试（包含默认标记排除的 e2e；不触发模型下载）
 $env:QT_QPA_PLATFORM='offscreen'
-$env:LUMINA_INFERENCE_BACKEND='heuristic'
-.\.venv-light\Scripts\python.exe -m pytest -q -o addopts=
 .\.venv\Scripts\python.exe -m pytest -q -o addopts=
 
 # 端到端冒烟（构造含连拍/模糊/过曝/清晰的图片集，跑通全链，较慢）
 python -m pytest tests -m e2e
 ```
+
+> ✅ **v0.6 已收敛为单一环境**：轻量 venv（`.venv-light`）、轻量依赖锁与两版对比断言全部删除。
+> 不再需要 `LUMINA_INFERENCE_BACKEND` 之类的外部变量 —— `test_pipeline.py` 改为向注册表注入
+> **确定性测试后端**并显式传参（`analyze_directory(..., backend="test-stub")`），
+> 因此单测不加载 torch/CLIP，跑得快、离线可跑、且不依赖外部状态。
+> **本机实测（v0.6 S2 后）**：`pytest tests` **192 passed / 1 deselected**（约 21 s）；
+> `pytest -q -o addopts=` **193 passed**（约 22 s）。
+>
+> 另注：跑批结束时若出现 `SystemExit: 1` 与 `safe-delete` 提示，是本机沙箱拦截 pytest 临时目录清理所致，
+> **与项目无关**，不影响用例判定。
+
+---
+
+## 🛠 开发与验证约定
+
+> 面向后续开发与自动化执行者，请严格遵守。
+
+| 约定 | 说明 |
+| --- | --- |
+| **受保护文件** | `评审总览_v0.4.md` 必须保持**未跟踪**，不得 `git add` 或提交（见 `WORKSPACE_README.md`）。 |
+| **不污染 Git 工作区** | 验证脚本、临时库、复现产物一律写在 `data/`（已被 `.gitignore` 排除），不要落在仓库根目录。 |
+| **不改动用户原片** | 任何测试/复现脚本**只能写临时目录**，严禁对用户照片目录做写操作。 |
+| **测试环境变量** | 跑 UI 相关用例需 `QT_QPA_PLATFORM=offscreen`。**后端已无进程级开关**（v0.6 S2-1 删除 `config.INFERENCE_BACKEND`），测试改为注入确定性后端 + 显式传参。 |
+| **提交粒度** | 一个工作包一个提交，提交信息须含「做了什么 + 为什么 + 如何回退」。 |
+| **模型变更纪律** | 任何模型变更都会改变 `ai_models` 签名并触发重算。**必须同时提供数据保护验证**，不可只改实现；上线前走影子评测门禁。 |
+| **许可门禁** | 新增依赖或权重前，须核验「仓库许可 + **具体权重文件**许可 + 训练集再分发条款」；`scripts/check_release_licenses.py` 必须通过。pyiqa（NTU S-Lab + CC BY-NC-SA，非商用）**禁止**进入分发链。 |
+| **阈值不硬编码** | 现状 `BLUR_WASTE=60`、`EAR_CLOSED_THRESHOLD=0.20`、`SCORE_GAP=3.0` 均为手写常量。改动须走标定并在影子评测集上验证，禁止直接改默认值上线。 |
+| **根因文件索引** | `engine/pipeline.py` 的 `_ai_model_signature()` 与清库/重算分支是全项目最高风险处（P0-1）。v0.6 S1 已把签名变化时的 `clear_all()` 改为 `reset_metrics()`（只置空模型派生列、保留人工决策），S2-1 又删除了触发该分支的进程级后端开关。**任何再触及签名或清库的改动仍必须单独评审并附数据保护验证。** |
 
 ---
 

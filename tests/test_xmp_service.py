@@ -26,7 +26,7 @@ def _selection(**overrides) -> XmpSelection:
         "label": "Green",
         "keywords": ("family", "精选"),
         "app_version": "0.5.0",
-        "backend": "heuristic",
+        "backend": "torch",
         "reasons": ("best-in-group", "eyes-open"),
     }
     values.update(overrides)
@@ -50,7 +50,7 @@ def test_creates_valid_raw_sidecar_with_managed_fields(tmp_path):
     assert description.get(f"{{{NS['xmp']}}}Rating") == "5"
     assert description.get(f"{{{NS['xmp']}}}Label") == "Green"
     assert description.get(f"{{{LUMINA_NS}}}AppVersion") == "0.5.0"
-    assert description.get(f"{{{LUMINA_NS}}}Backend") == "heuristic"
+    assert description.get(f"{{{LUMINA_NS}}}Backend") == "torch"
     assert tree.xpath("//dc:subject/rdf:Bag/rdf:li/text()", namespaces=NS) == [
         "family",
         "精选",

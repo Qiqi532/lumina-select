@@ -1,14 +1,28 @@
-# Lumina Select v0.5 工作区说明
+# Lumina Select 工作区说明
 
-最后同步：2026-09-14
-当前分支：`lightweight`
-远端状态：`origin/lightweight` 已同步到提交 `0f5921b`
+最后同步：2026-10-10
+当前分支：`lightweight`（注意：此分支名**名不符实**，它实际是开发主线）
+远端状态：`origin/lightweight` 已同步到提交 `0832f7a`；`master` 停在 `37332c4`（v0.4.0 回溯点）
+
+> **✅ v0.6「单版本基线」进行中**：S1（数据保护，门禁 G1 通过）与 S2（双版本收敛，代码/测试/文档已收敛）已完成。
+> 完整计划、门禁与风险清单见 **`../开发计划_v0.6-v0.8_2026-10-10.md`**。
+> **轻量版已删除**（后端、配置开关、打包四件套、依赖锁、两版对比断言），不要再基于它开发。
+
+> **分支策略已定（GH-1 选项①）**：`lightweight` 合并/改名为 `main`，`master` 留作回溯点。
+> **仅为记录，未执行任何推送**——按约定，所有 GitHub 动作须逐次获得用户授权。
+
+## 当前阶段：v0.6「单版本基线」
+
+原硬性约束「先修 P0-1，再做合并」**已满足**：`engine/pipeline.py` 在模型签名变化时不再 `clear_all()`，
+而是 `reset_metrics()`（只置空模型派生列、保留 `star`/`label`/`decision_source`/`scene_manual`）；
+换分析源时先进 `meta` 归档人工决策、再清库、再恢复。数据保护回归（Repro A/B/C）全绿，
+并有 `tests/test_pipeline.py` 的两条 P0-1 回归用例长期守住。
+S2-1 进一步删除了进程级后端开关 `config.INFERENCE_BACKEND`——P0-1 的**根因**随之消失。
 
 ## 当前进度
 
 - v0.5 专业选片流程已实现：导入、分析、复核、导出到 Lightroom。
-- 轻量版使用 OpenCV 启发式评分，不包含 Torch、Transformers 或模型下载。
-- 标准版保留 Torch/CLIP/ViT 与 OpenCV 技术质量评分。
+- **只剩一条产品线**：Torch/CLIP/ViT + OpenCV 技术质量评分。
 - RAW+JPEG 按同一资产关联，人工决定同步；RAW 使用 XMP sidecar，非 RAW 只写导出副本。
 - 已修复 Qt6 复核绘制错误、RAW 分析卡顿、人脸检测冻结打包问题，以及中文路径下 ExifTool 导出失败。
 - 你提供的 `D:\PHOTO\SYSU\South\26.9.8` 已验证：87 张 NEF、36 张 JPG 均可读取和生成预览。
@@ -18,15 +32,15 @@
 
 最新开发候选安装包：
 
-- `build-tools\Output-light-stage-r8\LuminaSelect-v0.5-lightweight-dev-candidate.exe`
 - `build-tools\Output-standard-stage-r8\LuminaSelect-v0.5-standard-dev-candidate.exe`
 
 无需安装的 onedir 程序：
 
-- `build-tools\dist-light-r8\光影选片助手\光影选片助手.exe`
 - `build-tools\dist-standard-r8\光影选片助手\光影选片助手.exe`
+- 本次 v0.6 S2 重新构建的产物：`dist\光影选片助手\光影选片助手.exe`
 
-建议先使用轻量版；标准版需要本地 CLIP 缓存或联网下载模型。
+请使用**标准版**——它是收敛后唯一的产品线，需要本地 CLIP 缓存或联网下载模型。
+历史轻量版产物（`build-tools\Output-light-stage-r8\`、`dist-light-r8\`）仅作 v0.5 对照，**不再更新**。
 
 ## 目录结构
 
@@ -40,26 +54,37 @@
 | `models/` | 随仓库分发的小权重；大模型在缓存目录 |
 | `dist*/` | 历史或当前可直接运行的 onedir 程序，清理时保留 |
 | `build-tools/Output-*-stage-r8/` | 最新安装包，清理时保留 |
-| `.venv-light/` | 轻量开发/测试环境 |
-| `.venv/` | 标准开发/测试环境 |
+| `.venv-light/` | 轻量开发/测试环境（**已废弃**：v0.6 S2 后不再需要，可删除） |
+| `.venv/` | 唯一开发/测试环境 |
 | `.hf_cache/`、`.torch_cache/` | 本地模型缓存，不提交 Git |
 | `data/` | 测试图片、性能数据和本地数据库；不写入用户原片目录 |
+| `data/_offline_probe.py`、`data/_cache_verify.py` | 门禁 G3 的离线能力证据脚本 |
 
 ## 常用验证命令
 
+**v0.6 S2 后只剩一条链路，无需预设任何后端变量：**
+
 ```powershell
-$env:LUMINA_INFERENCE_BACKEND='heuristic'
 $env:QT_QPA_PLATFORM='offscreen'
-.\.venv-light\Scripts\python.exe -m pytest -q -o 'addopts='
-.\.venv\Scripts\python.exe -m pytest -q -o 'addopts='
-.\.venv-light\Scripts\python.exe scripts\benchmark_review.py --items 1000
+.\.venv\Scripts\python.exe -m pytest tests                      # 192 passed, 1 deselected（约 21s）
+.\.venv\Scripts\python.exe -m pytest -q -o 'addopts='           # 193 passed（含 e2e，约 22s）
+.\.venv\Scripts\python.exe scripts\benchmark_review.py --items 1000 --json benchmark-standard.json
+.\.venv\Scripts\python.exe scripts\check_release_licenses.py    # 67 packages
+.\.venv\Scripts\python.exe data\_cache_verify.py                # 离线加载全部运行期模型
+.\.venv\Scripts\python.exe data\_offline_probe.py               # 断网+空缓存 → 降级完成而非崩溃
 ```
 
-PyInstaller 规格：`光影选片助手_dist_lightweight.spec` 和 `光影选片助手_dist.spec`。
-安装包脚本：`installer_lightweight.iss` 和 `installer.iss`。
+> 注：`pytest tests` 里的 `test_pipeline.py` 使用**注入的确定性测试后端**，不加载 torch/CLIP；
+> 唯一会真正加载模型的是发布冒烟用例（约 4~15 s）。
+
+PyInstaller 规格：`光影选片助手_dist.spec`（**唯一**发行规格）。
+安装包脚本：`installer.iss`（**唯一**）。
 
 ## Git 注意事项
 
 - 受保护文件 `评审总览_v0.4.md` 必须保持未跟踪，不得暂存或提交。
 - 构建产物、虚拟环境、缓存、日志和数据库由 `.gitignore` 排除。
-- 目前最近三个修复提交：`4346d7c`、`572bcd6`、`0f5921b`。
+- 验证/复现脚本一律写 `data/`，不要落在仓库根目录。
+- 远端仓库为 `https://github.com/Qiqi532/lumina-select.git`（非 `smart-cull-assistant`）。
+- **推送前须经用户确认**；若遇 502，用 `git -c http.version=HTTP/1.1 -c pack.threads=1 push --no-thin origin <branch>`，成功判据为 `git ls-remote origin refs/heads/<branch>` 哈希已更新。
+- 最近提交：`0832f7a`（文档）、`0f5921b`（Unicode 导出路径）、`572bcd6`（隔离候选输入）。

@@ -16,7 +16,7 @@ def _selection() -> XmpSelection:
         label="Green",
         keywords=("旅行", "精选"),
         app_version="0.5.0",
-        backend="heuristic",
+        backend="torch",
         reasons=("best-in-group",),
     )
 

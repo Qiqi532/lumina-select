@@ -12,6 +12,7 @@ from services.metadata_writer import MetadataWriter
 from services.xmp_service import XmpSelection
 from services.distribution_smoke import run_smoke_payload
 from scripts.smoke_dist import audit_bundle
+from engine.inference import DEFAULT_BACKEND
 
 
 def test_exiftool_archive_rejects_wrong_hash(tmp_path):
@@ -45,7 +46,7 @@ def test_staged_exiftool_writes_delivery_jpeg(tmp_path):
     Image.new("RGB", (32, 32), "green").save(target)
     result = MetadataWriter(executable, delivery, config_path=config).write(
         target,
-        XmpSelection(5, "Green", (), "0.5.0", "heuristic", ()),
+        XmpSelection(5, "Green", (), "0.5.0", "torch", ()),
     )
     assert result.success, result
     assert target.is_file()
@@ -63,7 +64,7 @@ def test_staged_exiftool_writes_jpeg_in_chinese_delivery_path(tmp_path):
 
     result = MetadataWriter(executable, delivery, config_path=config).write(
         target,
-        XmpSelection(5, "Green", ("旅行",), "0.5.0", "heuristic", ()),
+        XmpSelection(5, "Green", ("旅行",), "0.5.0", "torch", ()),
     )
 
     assert result.success, result
@@ -72,22 +73,33 @@ def test_staged_exiftool_writes_jpeg_in_chinese_delivery_path(tmp_path):
 
 
 def test_smoke_payload_starts_analyzes_and_exports(tmp_path, monkeypatch):
-    from engine import config
+    """【v0.6 S2-1】冒烟走**发行默认后端**（注入参数已随轻量版下线）。
 
-    monkeypatch.setenv("LUMINA_INFERENCE_BACKEND", "heuristic")
+    单版本之后，冒烟要验证的就是用户实际会跑到的那条路径，因此不再把后端钉成轻量版，
+    report["backend"] 必须等于 inference.DEFAULT_BACKEND。本用例在 conftest 强制的
+    HF_HUB_OFFLINE 下运行，因此它同时是"断网首启可完成分析"（G3）的一条现场验证。
+    """
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    monkeypatch.setattr(config, "INFERENCE_BACKEND", "heuristic")
-    report = run_smoke_payload(tmp_path, backend="heuristic")
+    report = run_smoke_payload(tmp_path)
     assert report["started"]
+    assert report["backend"] == DEFAULT_BACKEND
     assert report["analyzed"] == 1
+    # 本机模型缓存完整 ⇒ 不应出现任何降级（这条同时守住"本地齐全即只读本地"的接线）
+    assert report["degradations"] == []
     assert report["face_detection_available"]
     assert report["exported"] == 1
     assert report["source_unchanged"]
 
 
-def test_bundle_audit_rejects_forbidden_runtime(tmp_path):
+def test_bundle_audit_requires_torch_and_rejects_pyiqa(tmp_path):
+    """【v0.6 S2-1】只剩一套产物规则：torch/transformers 必须存在，pyiqa 绝不出现。"""
     internal = tmp_path / "_internal"
-    (internal / "torch").mkdir(parents=True)
-    assert "torch" in audit_bundle(tmp_path, "heuristic")
-    (internal / "torch").rmdir()
-    assert audit_bundle(tmp_path, "heuristic") == []
+    internal.mkdir()
+    assert audit_bundle(tmp_path) == ["missing:torch", "missing:transformers"]
+
+    (internal / "torch").mkdir()
+    (internal / "transformers").mkdir()
+    assert audit_bundle(tmp_path) == []
+
+    (internal / "pyiqa").mkdir()
+    assert audit_bundle(tmp_path) == ["pyiqa"]

@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
-from engine import config, inference
+from engine import inference
 from engine.faces import detect_face_ear
 from engine.pipeline import analyze_directory
 from engine.store import PhotoStore
@@ -20,11 +20,14 @@ from services.metadata_writer import MetadataWriter
 from ui.main_window import MainWindow
 
 
-def run_smoke_payload(root: Path, *, backend: str | None = None) -> dict:
+def run_smoke_payload(root: Path) -> dict:
+    """冻结态冒烟：启动 UI → 分析一张 → 导出。
+
+    【v0.6 S2-1】原先接受 backend 参数并写进进程级 config.INFERENCE_BACKEND，
+    现已删除：后端恒为 inference.DEFAULT_BACKEND，报告里的 backend 直接取自
+    分析结果（analyzed["backend"]），因此报告反映的是**实际生效**的后端。
+    """
     root.mkdir(parents=True, exist_ok=True)
-    if backend is not None:
-        config.INFERENCE_BACKEND = backend
-        inference.reset_cache()
     app = QApplication.instance() or QApplication([])
     db_path = root / "smoke.db"
     window = MainWindow(project_db=db_path)
@@ -68,9 +71,13 @@ def run_smoke_payload(root: Path, *, backend: str | None = None) -> dict:
         results = pool.submit(export_in_worker).result()
     return {
         "frozen": bool(getattr(sys, "frozen", False)),
-        "backend": config.INFERENCE_BACKEND,
+        "backend": analyzed.get("backend") or inference.DEFAULT_BACKEND,
         "started": started,
         "analyzed": analyzed["new_analyzed"],
+        # 【v0.6 S2-2 / G3】把降级项带进报告：冒烟在断网 + 空缓存下**也应该**
+        # 完成分析（阶段一可用），但必须能一眼看出这次是不是走了降级路径 ——
+        # 否则"断网也能跑通"会被误读成"模型都加载上了"。
+        "degradations": analyzed.get("degradations") or [],
         "face_detection_available": face_result["error"] is None,
         "face_detection_error": face_result["error"],
         "exported": sum(item.status == "success" for item in results),

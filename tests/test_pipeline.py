@@ -212,6 +212,9 @@ def test_pipeline_persists_backend_models_and_analysis_time(full_data_dir, tmp_d
     assert {row["quality_model"] for row in rows} == {STUB_QUALITY_MODEL}
     assert {row["scene_model"] for row in rows} == {STUB_AESTHETIC_MODEL}
     assert all(row["analysis_ms"] is not None and row["analysis_ms"] >= 0 for row in rows)
+    # 【S2-1】发行版只有一个后端：默认必须是 torch，且轻量后端不得回流。
+    assert inference.DEFAULT_BACKEND == "torch"
+    assert "heuristic" not in inference.backend_names()
 
 
 # ---------------------------------------------------------------------------

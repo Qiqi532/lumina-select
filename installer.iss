@@ -42,7 +42,8 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 ; 单一安装包（非管理员也可装到用户目录；如需机器级安装去掉 PrivilegesRequired）
 PrivilegesRequired=lowest
-; AppId 用于区分标准版与轻量版的升级/卸载记录
+; AppId 决定升级/卸载记录归属。本项目自 v0.6 起只发行一个版本（标准版），
+; 轻量版安装器 installer_lightweight.iss 已删除，不再存在双 AppId 并存的情形。
 UninstallDisplayIcon={app}\光影选片助手.exe
 ; 输出
 OutputDir={#MyOutputDir}

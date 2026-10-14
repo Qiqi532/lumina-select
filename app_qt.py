@@ -8,7 +8,7 @@ import traceback
 import json
 import tempfile
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ui.main_window import MainWindow
 from ui.theme import stylesheet

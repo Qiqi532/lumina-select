@@ -8,7 +8,7 @@ import sys
 
 import numpy as np
 from PIL import Image
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from engine import inference
 from engine.faces import detect_face_ear

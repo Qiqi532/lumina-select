@@ -27,7 +27,7 @@ def _app_dir() -> str:
 
 _app = _app_dir()
 
-# 自定义钩子先于 PyInstaller 的 PyQt6 钩子执行。QtCore 若先加载，Windows
+# 自定义钩子先于 PyInstaller 的 PySide6 钩子执行。QtCore 若先加载，Windows
 # 上 MediaPipe 的 _framework_bindings 会报 DLL 初始化失败；先装载该扩展。
 if getattr(sys, "frozen", False) and sys.platform == "win32":
     import ctypes

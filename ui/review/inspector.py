@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtGui import QImage
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QScrollArea,
@@ -112,7 +112,7 @@ class CollapsibleSection(QWidget):
 
 
 class InspectorWidget(QScrollArea):
-    face_selected = pyqtSignal(tuple)
+    face_selected = Signal(tuple)
 
     def __init__(self, store=None, parent=None) -> None:
         super().__init__(parent)

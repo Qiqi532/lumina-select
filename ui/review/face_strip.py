@@ -1,13 +1,13 @@
 """Face crops from an already decoded preview; no source-file I/O."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QSize, pyqtSignal
-from PyQt6.QtGui import QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtCore import QSize, Signal
+from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 
 class FaceStrip(QWidget):
-    face_selected = pyqtSignal(tuple)
+    face_selected = Signal(tuple)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

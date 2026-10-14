@@ -47,9 +47,8 @@ Generated from the locked runtime requirements and installed metadata.
 | pycparser | 3.0 | BSD-3-Clause | Homepage, https://github.com/eliben/pycparser |
 | Pygments | 2.21.0 | BSD-2-Clause | Homepage, https://pygments.org |
 | pyparsing | 3.3.2 | MIT | Documentation, https://pyparsing-docs.readthedocs.io/en/latest/ |
-| PyQt6 | 6.8.1 | GPL v3 | homepage, https://www.riverbankcomputing.com/software/pyqt/ |
-| PyQt6-Qt6 | 6.8.2 | LGPL v3 | https://www.riverbankcomputing.com/software/pyqt/ |
-| PyQt6_sip | 13.12.0 | BSD-2-Clause | https://github.com/Python-SIP/sip |
+| pyside6 | 6.8.1 | Not installed | Not available |
+| PySide6_Essentials | 6.8.1 | LGPL | Homepage, https://pyside.org |
 | python-dateutil | 2.9.0.post0 | Dual License | https://github.com/dateutil/dateutil |
 | PyWavelets | 1.9.0 | MIT AND BSD-3-Clause | homepage, https://github.com/PyWavelets/pywt |
 | PyYAML | 6.0.3 | MIT | https://pyyaml.org/ |
@@ -61,6 +60,7 @@ Generated from the locked runtime requirements and installed metadata.
 | sentencepiece | 0.2.2 | Apache-2.0 | Homepage, https://github.com/google/sentencepiece |
 | setuptools | 84.0.0 | MIT | Source, https://github.com/pypa/setuptools |
 | shellingham | 1.5.4 | ISC License | https://github.com/sarugaku/shellingham |
+| shiboken6 | 6.8.1 | LGPL | Homepage, https://pyside.org |
 | six | 1.17.0 | MIT | https://github.com/benjaminp/six |
 | sounddevice | 0.5.6 | MIT | Documentation, https://python-sounddevice.readthedocs.io/ |
 | sympy | 1.14.0 | BSD | https://sympy.org |

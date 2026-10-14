@@ -6,9 +6,9 @@ from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
-from PyQt6.QtWidgets import QListView, QStyle, QStyledItemDelegate
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate
 
 from services.review_service import ReviewItem
 from ui.theme import COLORS
@@ -32,7 +32,7 @@ def _load_qimage(path: str) -> QImage:
 
 
 class FilmstripModel(QAbstractListModel):
-    thumbnail_finished = pyqtSignal(int, str, object)
+    thumbnail_finished = Signal(int, str, object)
 
     AssetIdRole = int(Qt.ItemDataRole.UserRole) + 1
     StarRole = AssetIdRole + 1

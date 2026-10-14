@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtGui import QImage
+from PySide6.QtGui import QImage
 
 from engine.store import PhotoStore
 from ui.review.face_strip import FaceStrip

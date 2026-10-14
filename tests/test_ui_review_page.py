@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from threading import Event
 
-from PyQt6.QtGui import QImage
+from PySide6.QtGui import QImage
 
 from engine.store import PhotoStore
 from services.review_service import ReviewFilter, ReviewService, ViewMode

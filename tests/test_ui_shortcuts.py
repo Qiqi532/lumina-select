@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLineEdit, QVBoxLayout, QWidget
 
 from ui.review.shortcuts import COMMAND_KEYS, install_review_shortcuts
 

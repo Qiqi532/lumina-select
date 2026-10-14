@@ -5,9 +5,9 @@ from collections import OrderedDict
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from typing import Callable
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QImage, QKeyEvent, QMouseEvent, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QImage, QKeyEvent, QMouseEvent, QPixmap
+from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsView,
     QGridLayout,
@@ -36,7 +36,7 @@ def _load_large_qimage(path: str) -> QImage:
 
 
 class PhotoViewport(QGraphicsView):
-    double_clicked = pyqtSignal(str)
+    double_clicked = Signal(str)
 
     def __init__(self, asset_id: str, parent=None) -> None:
         super().__init__(parent)
@@ -102,8 +102,8 @@ class PhotoViewport(QGraphicsView):
 
 
 class CanvasWidget(QWidget):
-    image_finished = pyqtSignal(int, str, object)
-    image_ready = pyqtSignal(str, object)
+    image_finished = Signal(int, str, object)
+    image_ready = Signal(str, object)
 
     def __init__(
         self,

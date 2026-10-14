@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from threading import Event
 
-from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QImage, QPainter, QPixmap
-from PyQt6.QtWidgets import QStyleOptionViewItem
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtWidgets import QStyleOptionViewItem
 
 from services.review_service import ReviewFilter, ReviewItem
 from ui.review.filmstrip import FilmstripDelegate, FilmstripModel, FilmstripView

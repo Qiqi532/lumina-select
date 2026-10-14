@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage
-from PyQt6.QtTest import QTest
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage
+from PySide6.QtTest import QTest
 
 from services.review_service import ReviewItem, ViewMode
 from ui.review.canvas import CanvasWidget
@@ -78,7 +78,7 @@ def test_tab_toggle_and_double_click_inspection_esc_return(qtbot):
 
 
 def _escape_event():
-    from PyQt6.QtGui import QKeyEvent
+    from PySide6.QtGui import QKeyEvent
 
     return QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
 

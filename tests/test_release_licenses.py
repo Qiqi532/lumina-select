@@ -15,7 +15,7 @@ POLICY = {
         "non-commercial",
         "research only",
     ],
-    "manual_review_packages": ["PyQt6", "PyQt6-Qt6", "PyQt6-sip"],
+    "manual_review_packages": ["PySide6", "PySide6-Essentials", "shiboken6"],
 }
 
 
@@ -48,21 +48,21 @@ def test_denied_license_terms_fail():
         assert {issue.code for issue in issues} >= {"denied_license"}
 
 
-def test_development_allows_pyqt_manual_review():
+def test_development_allows_pyside_manual_review():
     issues = audit_requirements(
-        "PyQt6==6.8.1\n",
+        "PySide6==6.8.1\n",
         POLICY,
-        {"pyqt6": _package("PyQt6", "GPL-3.0-only")},
+        {"pyside6": _package("PySide6", "LGPL-3.0-only")},
     )
 
     assert issues == []
 
 
-def test_release_requires_real_pyqt_approval():
+def test_release_requires_real_pyside_approval():
     issues = audit_requirements(
-        "PyQt6==6.8.1\n",
+        "PySide6==6.8.1\n",
         POLICY,
-        {"pyqt6": _package("PyQt6", "GPL-3.0-only")},
+        {"pyside6": _package("PySide6", "LGPL-3.0-only")},
         release=True,
         approvals={},
     )
@@ -72,17 +72,17 @@ def test_release_requires_real_pyqt_approval():
 
 def test_release_accepts_complete_auditable_approval():
     approvals = {
-        "pyqt6": {
-            "basis": "Commercial agreement LS-2026-001",
+        "pyside6": {
+            "basis": "LGPLv3 obligations satisfied: full license text shipped, onedir kept",
             "reviewer": "Legal reviewer",
-            "reviewed_on": "2026-09-12",
+            "reviewed_on": "2026-10-14",
         }
     }
 
     issues = audit_requirements(
-        "PyQt6==6.8.1\n",
+        "PySide6==6.8.1\n",
         POLICY,
-        {"pyqt6": _package("PyQt6", "Commercial")},
+        {"pyside6": _package("PySide6", "LGPL-3.0-only")},
         release=True,
         approvals=approvals,
     )

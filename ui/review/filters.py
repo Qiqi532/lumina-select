@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from services.review_service import ReviewFilter
 
@@ -20,7 +20,7 @@ LABELS = {
 
 
 class FilterSidebar(QWidget):
-    filter_selected = pyqtSignal(object)
+    filter_selected = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

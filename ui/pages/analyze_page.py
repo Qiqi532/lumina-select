@@ -7,8 +7,8 @@
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -26,10 +26,10 @@ _log = get_logger("ui.analyze")
 
 
 class AnalyzeWorker(QThread):
-    progress = pyqtSignal(str, int, int)
-    succeeded = pyqtSignal(dict)
-    failed = pyqtSignal(str)
-    cancelled = pyqtSignal()
+    progress = Signal(str, int, int)
+    succeeded = Signal(dict)
+    failed = Signal(str)
+    cancelled = Signal()
 
     def __init__(self, source: str, db_path: str, *, backend: str | None = None, parent=None):
         super().__init__(parent)
@@ -66,9 +66,9 @@ class AnalyzeWorker(QThread):
 
 
 class AnalyzePage(QWidget):
-    succeeded = pyqtSignal(dict)
-    failed = pyqtSignal(str)
-    cancelled = pyqtSignal()
+    succeeded = Signal(dict)
+    failed = Signal(str)
+    cancelled = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

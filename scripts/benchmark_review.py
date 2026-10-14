@@ -9,7 +9,7 @@ import sys
 import tempfile
 from time import perf_counter
 
-from PyQt6.QtCore import QT_VERSION_STR
+from PySide6.QtCore import qVersion
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -63,7 +63,7 @@ def run_benchmark(items: int) -> dict:
         "loaded_items": len(service.items),
         "machine": platform.platform(),
         "python": platform.python_version(),
-        "qt": QT_VERSION_STR,
+        "qt": qVersion(),
         "load_seconds": load_seconds,
         "filters_seconds": filters,
         "thresholds_seconds": {"load": 3.0, "filter": 0.3},

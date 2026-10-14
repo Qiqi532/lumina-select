@@ -1,9 +1,9 @@
 """Five-zone keyboard-first review workspace wired exclusively to services."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QImage
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,

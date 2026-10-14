@@ -1,8 +1,8 @@
 """Directory selection intent; project ownership stays in MainWindow."""
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -22,7 +22,7 @@ class ContentSafeButton(QPushButton):
 
 
 class ImportPage(QWidget):
-    source_selected = pyqtSignal(str)
+    source_selected = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

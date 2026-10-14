@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from PyQt6.QtCore import QThread, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -50,9 +50,9 @@ def _metadata_writer(target_dir: Path) -> MetadataWriter:
 
 
 class ExportWorker(QThread):
-    progress = pyqtSignal(int, int)
-    completed = pyqtSignal(object)
-    failed = pyqtSignal(str)
+    progress = Signal(int, int)
+    completed = Signal(object)
+    failed = Signal(str)
 
     def __init__(
         self,
@@ -99,7 +99,7 @@ class ExportWorker(QThread):
 
 
 class ExportPage(QWidget):
-    export_finished = pyqtSignal(object)
+    export_finished = Signal(object)
 
     def __init__(
         self,

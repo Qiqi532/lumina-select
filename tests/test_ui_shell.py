@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
 from ui.pages.analyze_page import AnalyzePage, AnalyzeWorker

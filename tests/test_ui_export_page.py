@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
-from PyQt6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from engine.store import PhotoStore
 from services.asset_pairing import pair_assets

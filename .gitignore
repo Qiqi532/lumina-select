@@ -47,6 +47,8 @@ _srv_err.log
 .idea/
 .vscode/
 .superpowers/
+# 工作区临时目录（构建日志 / 一次性调试脚本），不进仓库
+.workbuddy/
 *.swp
 .DS_Store
 Thumbs.db

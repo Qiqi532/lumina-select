@@ -1,4 +1,22 @@
-"""Professional four-stage shell and project lifecycle."""
+"""Professional four-stage shell and project lifecycle.
+
+【T-05 / M0-5 改造】从"一次向导"升级为"可持续的库"：
+
+    * 新增 **项目入口页**（``LibraryPage``）作为 Shell 的首页 —— 列出已登记项目，
+      支持新建 / 打开 / 从文件夹打开 / 从列表移除。
+    * 原来的四阶段工作流（导入→分析→复核→导出）四个 Page **内部实现一律不动**，
+      只是被 Shell 挂到内容区；打开项目时按需重建"依赖 store"的页面。
+    * 项目切换的实质：把 ``self.store`` 指向该项目的 ``cull.db``，并重建
+      ReviewPage / ExportPage（它们在构造时捕获 store）。ImportPage / AnalyzePage
+      不持有 store，跨项目复用即可。
+    * 关闭重开：App 启动即进入口页，选中项目后回到该项目库 —— 人工决策
+      （star / label / decision_source）都在各自的 ``cull.db`` 里，天然零丢失。
+
+红线遵守：
+    * 本文件不含 SQL（N6）；库读写一律经 ``engine/store.py`` 与
+      ``engine/catalog_registry.py``。
+    * 不触碰 ``METRIC_FIELDS`` / ``_ai_model_signature()``（A6）。
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,11 +36,13 @@ from PySide6.QtWidgets import (
 )
 
 from engine import config
+from engine.catalog_registry import CatalogRegistry, read_photo_count
 from engine.log import get_logger
 from engine.store import PhotoStore
 from .pages.analyze_page import AnalyzePage
 from .pages.export_page import ExportPage
 from .pages.import_page import ImportPage
+from .pages.library_page import LibraryPage
 from .pages.review_page import ReviewPage
 
 _log = get_logger("ui.main")
@@ -35,24 +55,54 @@ STAGES = (
     ("export", "4 导出到 LR"),
 )
 
+LIBRARY_PAGE = "library"
+
 
 class MainWindow(QMainWindow):
-    def __init__(self, *, project_db: str | Path | None = None, parent=None) -> None:
+    def __init__(
+        self,
+        *,
+        project_db: str | Path | None = None,
+        registry: CatalogRegistry | None = None,
+        start_in_library: bool | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Lumina Select · 光影选片助手")
         self.resize(1280, 800)
         self.setMinimumSize(960, 600)
-        self.store = PhotoStore(str(project_db or config.DEFAULT_DB))
+
+        # 全局项目注册表：跨项目索引，独立于任何项目库。
+        self.registry = registry or CatalogRegistry()
+        # 允许注入以便测试；默认沿用既有行为（config.DEFAULT_DB）。
+        self._initial_project = str(project_db or config.DEFAULT_DB)
+        # 未显式指定时：给了具体项目库就直接开工（兼容老用法），
+        # 否则先进入口页（跨天工作流的正门）。
+        self.start_in_library = (
+            (project_db is None) if start_in_library is None else start_in_library
+        )
+
+        # PhotoStore 会顺手把库文件建出来（哪怕只是启动默认库），所以"库存在"
+        # 并不代表"用户用过它" —— 是否值得登记只看照片数，见 register_current_project。
+        self.store: PhotoStore = PhotoStore(self._initial_project)
+        self.project_path: str = self.store.db_path
         self.current_stage_name = "import"
+        self._project_pages: dict[str, QWidget] = {}
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(16, 16, 16, 8)
         root_layout.setSpacing(12)
+
         header = QFrame()
         header.setObjectName("WorkflowHeader")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 12, 16, 12)
+        self.back_button = QPushButton("← 我的项目")
+        self.back_button.setObjectName("BackToLibrary")
+        self.back_button.setToolTip("返回项目列表（当前项目的标星/标记会保留）")
+        self.back_button.clicked.connect(lambda: self.show_library())
+        header_layout.addWidget(self.back_button)
         brand = QLabel("LUMINA SELECT")
         brand.setObjectName("PageTitle")
         header_layout.addWidget(brand)
@@ -65,6 +115,7 @@ class MainWindow(QMainWindow):
             header_layout.addWidget(button)
             self.stage_buttons.append(button)
         root_layout.addWidget(header)
+
         state_row = QHBoxLayout()
         self.stage_state_label = QLabel()
         self.stage_state_label.setObjectName("StageState")
@@ -89,49 +140,258 @@ class MainWindow(QMainWindow):
         root_layout.addLayout(state_row)
 
         self.stack = QStackedWidget()
+        # 入口页（不持有 store）。
+        self.library_page = LibraryPage()
+        # 不依赖 store 的两个页面：跨项目复用。
         self.import_page = ImportPage()
         self.analyze_page = AnalyzePage()
+        self.stack.addWidget(self.library_page)
+        self.stack.addWidget(self.import_page)
+        self.stack.addWidget(self.analyze_page)
+        # 依赖 store 的两个页面：随项目重建。
+        self.review_page: ReviewPage | None = None
+        self.export_page: ExportPage | None = None
+        self._install_project_pages()
+        root_layout.addWidget(self.stack, 1)
+        self.setCentralWidget(root)
+        self.statusBar().showMessage("项目已保存 · 照片仅在本机处理")
+
+        self.library_page.open_project.connect(self.open_project)
+        self.library_page.create_project.connect(self.create_project)
+        self.library_page.forget_project.connect(self.forget_project)
+        self.import_page.source_selected.connect(self.begin_analysis)
+        self.analyze_page.succeeded.connect(self._analysis_succeeded)
+        self.analyze_page.failed.connect(self.show_error)
+        self.analyze_page.cancelled.connect(lambda: self.status("分析已取消"))
+
+        self.register_current_project(touch=True, skip_unused_default=True)
+        if self.start_in_library:
+            self.show_library()
+        else:
+            self.goto("import")
+        self.refresh_upgrade_notice()
+
+    # ------------------------------------------------------------------
+    # 页面装配
+    # ------------------------------------------------------------------
+    def _install_project_pages(self) -> None:
+        """按当前 ``self.store`` 创建/替换依赖 store 的页面。"""
+        old_review, old_export = self.review_page, self.export_page
         self.review_page = ReviewPage(self.store)
         self.export_page = ExportPage(self.store)
-        self.pages = {
+        self.stack.addWidget(self.review_page)
+        self.stack.addWidget(self.export_page)
+        self._project_pages = {
             "import": self.import_page,
             "analyze": self.analyze_page,
             "review": self.review_page,
             "export": self.export_page,
         }
-        for page in self.pages.values():
-            self.stack.addWidget(page)
-        root_layout.addWidget(self.stack, 1)
-        self.setCentralWidget(root)
-        self.statusBar().showMessage("项目已保存 · 照片仅在本机处理")
+        # 旧页面必须真正退场（它们各自持有 store 与定时器/线程）。
+        if old_review is not None:
+            try:
+                old_review.shutdown()
+            except Exception as error:  # noqa: BLE001
+                _log.warning("释放旧复核页失败（已忽略）：%s", error)
+            self.stack.removeWidget(old_review)
+            old_review.deleteLater()
+        if old_export is not None:
+            try:
+                old_export.shutdown()
+            except Exception as error:  # noqa: BLE001
+                _log.warning("释放旧导出页失败（已忽略）：%s", error)
+            self.stack.removeWidget(old_export)
+            old_export.deleteLater()
 
-        self.import_page.source_selected.connect(self.begin_analysis)
-        self.analyze_page.succeeded.connect(self._analysis_succeeded)
-        self.analyze_page.failed.connect(self.show_error)
-        self.analyze_page.cancelled.connect(lambda: self.status("分析已取消"))
-        self.goto("import")
-        self.refresh_upgrade_notice()
+    @property
+    def pages(self) -> dict[str, QWidget]:
+        """工作流四页（不含入口页）。"""
+        return self._project_pages
 
     @property
     def current_page(self) -> QWidget:
         return self.stack.currentWidget()
 
+    # ------------------------------------------------------------------
+    # 项目生命周期
+    # ------------------------------------------------------------------
+    def register_current_project(self, *, touch: bool = True,
+                                 skip_unused_default: bool = False) -> None:
+        """把当前项目登记进全局注册表（照片数取只读查询结果）。
+
+        ``skip_unused_default``：启动时用的是"启动默认库"而非用户明确打开的项目。
+        此时只有它**确实装过照片**才值得登记，否则就别塞进入口页 ——
+        不然用户会看到一张指向空库、名字还叫 ``cull`` 或仓库名的幽灵卡片。
+        判据只有一个：**库里有照片**（``photo_count`` 为真）。
+
+        注意这里**不能**用"库文件是否预先存在"当判据：``PhotoStore`` 构造时会
+        顺手把库建出来，于是从第二次启动起文件永远存在 —— 一个从未用过的
+        默认库会变成永久幽灵卡片。用户真正在意的是"有没有内容"，只看计数。
+        """
+        if skip_unused_default:
+            count = read_photo_count(self.project_path)
+            if not count:
+                return
+        try:
+            count = read_photo_count(self.project_path)
+            self.registry.register(self.project_path, photo_count=count, touch=touch)
+        except Exception as error:  # noqa: BLE001 —— 登记失败不该拦住开工
+            _log.warning("登记项目到全局库失败（已忽略）：%s", error)
+
+    def library_entries(self):
+        """给入口页用的项目列表（并顺带刷新各项目照片数）。"""
+        entries = self.registry.entries()
+        for entry in entries:
+            count = read_photo_count(entry.path)
+            if count is not None and count != entry.photo_count:
+                try:
+                    self.registry.update_photo_count(entry.path, count)
+                    entry.photo_count = count
+                except Exception as error:  # noqa: BLE001
+                    _log.warning("刷新项目照片数失败（已忽略）：%s", error)
+        return entries
+
+    def show_library(self) -> None:
+        """切到入口页，并刷新卡片。"""
+        self.current_stage_name = LIBRARY_PAGE
+        self.library_page.show_entries(self.library_entries())
+        self.stack.setCurrentWidget(self.library_page)
+        self._set_workflow_visible(False)
+        self.stage_state_label.setText("我的项目 · 选择一个项目继续")
+
+    def _set_workflow_visible(self, visible: bool) -> None:
+        """入口页下隐藏阶段按钮与项目级兜底入口，避免误导。"""
+        for button in self.stage_buttons:
+            button.setVisible(visible)
+        self.back_button.setVisible(visible)
+        self.decisions_export_button.setVisible(visible)
+        # 升级提示按钮的可见性由 refresh_upgrade_notice 决定（只有检测到旧库才显示），
+        # 这里只在"回到入口页"时收起它，回到工作流时交还给 refresh_upgrade_notice。
+        if not visible:
+            self.upgrade_button.setVisible(False)
+        else:
+            self.refresh_upgrade_notice(announce=False)
+
+    def open_project(self, project_path: str | Path) -> None:
+        """打开一个项目：定位/新建其 cull.db，切换 store，进入导入页。
+
+        ``project_path`` 可以是项目库文件，也可以是项目文件夹（入口页
+        "从文件夹打开…"给的就是目录）——目录按约定收敛到 ``<dir>/data/cull.db``。
+        """
+        db_path = self._resolve_project_db(project_path)
+        if db_path is None:
+            return
+        if Path(db_path).resolve() == Path(self.project_path).resolve():
+            # 已经是当前项目：只刷新并回到导入页，不重建页面（避免无谓抖动）。
+            self.registry.touch(db_path)
+            self.goto("import")
+            return
+        self._switch_project(db_path)
+        self.goto("import")
+        count = read_photo_count(db_path)
+        suffix = f" · {count} 张" if count else ""
+        self.status(f"已打开项目：{Path(db_path).stem}{suffix}")
+
+    def create_project(self, directory: str | Path) -> None:
+        """在指定文件夹新建项目并打开（库文件落在 ``<dir>/data/cull.db``）。"""
+        db_path = self._project_db_in(Path(directory))
+        if db_path is None:
+            return
+        self.open_project(db_path)
+
+    def forget_project(self, project_path: str | Path) -> None:
+        """从入口页列表移除登记 —— **绝不删除库文件或照片**。"""
+        path = str(project_path)
+        removed = self.registry.forget(path)
+        self.library_page.show_entries(self.library_entries())
+        if removed:
+            self.status(f"已从列表移除：{Path(path).stem}（项目文件未被删除）")
+
+    def _switch_project(self, db_path: str | Path) -> None:
+        """把 store 换到新项目并重建依赖 store 的页面。"""
+        if self.export_page is not None and not self.export_page.shutdown():
+            self.show_error("导出仍在完成当前文件，请稍后再切换项目")
+            return
+        try:
+            new_store = PhotoStore(str(db_path))
+        except Exception as error:  # noqa: BLE001
+            _log.exception("打开项目失败：%s", db_path)
+            self.show_error(f"打开项目失败：{error}")
+            return
+        old_store = self.store
+        self.store = new_store
+        self.project_path = new_store.db_path
+        # 顺序要紧：先让旧页面退场（它们还持有旧 store），再关旧连接。
+        # 反过来会在 shutdown 里对已关闭的库做操作，日志刷一堆无用的 WARNING。
+        self._install_project_pages()
+        try:
+            old_store.close()
+        except Exception as error:  # noqa: BLE001
+            _log.warning("关闭旧项目库失败（已忽略）：%s", error)
+        self.register_current_project(touch=True)
+        self.refresh_upgrade_notice(announce=False)
+
+    def _resolve_project_db(self, project_path: str | Path) -> str | None:
+        """把用户给的路径（库文件或目录）解析成可用的项目库路径。"""
+        path = Path(project_path)
+        if path.is_dir():
+            return self._project_db_in(path)
+        if path.suffix.lower() == ".db":
+            return str(path)
+        # 既不是已存在的目录、也不是 .db 文件 —— 当作"待创建的项目目录"处理。
+        # ⚠️ 这里必须是 path 本身，不能退到 path.parent：否则会把父目录里的
+        #    其它 .db（例如同级的 catalogs.db）当成用户想打开的项目。
+        return self._project_db_in(path)
+
+    def _project_db_in(self, directory: Path) -> str | None:
+        """在目录中定位项目库：优先 ``data/cull.db``，其次已有的 ``*.db``。"""
+        if not directory.exists():
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                self.show_error(f"无法创建项目目录：{error}")
+                return None
+        canonical = directory / "data" / "cull.db"
+        if canonical.is_file():
+            return str(canonical)
+        root_db = directory / "cull.db"
+        if root_db.is_file():
+            return str(root_db)
+        # 目录里已有其它 .db（用户自建项目）→ 用最新的那个。
+        # 排除全局注册表文件名：万一用户把项目目录选到了 LuminaSelect 数据目录，
+        # 也不该把 catalogs.db 误当成项目库。
+        candidates = sorted(
+            (p for p in directory.glob("*.db")
+             if p.is_file() and p.name.lower() != "catalogs.db"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            return str(candidates[0])
+        return str(canonical)
+
+    # ------------------------------------------------------------------
+    # 工作流导航（保持既有行为）
+    # ------------------------------------------------------------------
     def goto(self, name: str) -> None:
-        if name not in self.pages:
+        if name not in self._project_pages:
             raise ValueError(f"unknown workflow stage: {name}")
         self.current_stage_name = name
+        self._set_workflow_visible(True)
         if name == "review":
             self.review_page.reload()
         elif name == "export":
             self.export_page.reload()
-        self.stack.setCurrentWidget(self.pages[name])
-        current_index = list(self.pages).index(name)
+        self.stack.setCurrentWidget(self._project_pages[name])
+        current_index = list(self._project_pages).index(name)
         for index, button in enumerate(self.stage_buttons):
             state = "current" if index == current_index else "done" if index < current_index else "future"
             button.setProperty("state", state)
             button.style().unpolish(button)
             button.style().polish(button)
-        self.stage_state_label.setText(f"当前：{STAGES[current_index][1]} · 项目已保存")
+        self.stage_state_label.setText(
+            f"当前：{STAGES[current_index][1]} · {Path(self.project_path).stem} · 项目已保存"
+        )
 
     def begin_analysis(self, source: str) -> None:
         # 【v0.6 S3-5 / P1-9】分析进行中再次触发（重复点选目录、双击）不得让
@@ -153,6 +413,8 @@ class MainWindow(QMainWindow):
         self.goto("review")
         # 重算之后旧后端记录已被覆盖：顺手刷新"旧库"入口，别让提示一直挂着。
         self.refresh_upgrade_notice(announce=False)
+        # 照片数变了，更新注册表里的登记（入口页下次打开即最新）。
+        self.register_current_project(touch=True)
         degradations = result.get("degradations") or []
         upgrade = result.get("upgrade") or {}
         details: list[str] = []
@@ -193,7 +455,9 @@ class MainWindow(QMainWindow):
         """检测到旧库才显示升级入口，避免给新用户一个纯噪音按钮。"""
         report = self.upgrade_report()
         needs_attention = bool(report.get("needs_attention"))
-        self.upgrade_button.setVisible(needs_attention)
+        # 入口页下不显示项目级按钮；只有进了工作流才谈升级提示。
+        visible = needs_attention and self.current_stage_name != LIBRARY_PAGE
+        self.upgrade_button.setVisible(visible)
         if needs_attention and announce:
             self.status("检测到旧项目：点「旧库升级说明」查看升级、备份与重算详情")
 
@@ -247,10 +511,12 @@ class MainWindow(QMainWindow):
                 self.show_error("分析仍在安全取消中，请稍后再退出")
                 event.ignore()
                 return
-        if not self.export_page.shutdown():
+        if self.export_page is not None and not self.export_page.shutdown():
             self.show_error("导出仍在完成当前文件，请稍后再退出")
             event.ignore()
             return
-        self.review_page.shutdown()
+        if self.review_page is not None:
+            self.review_page.shutdown()
         self.store.close()
+        self.registry.close()
         super().closeEvent(event)

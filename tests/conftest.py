@@ -13,6 +13,27 @@ from PIL import Image
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_global_registry(tmp_path_factory, monkeypatch):
+    """把全局项目注册表 + 默认项目库隔离到临时目录。
+
+    【T-05】MainWindow 默认会创建 ``CatalogRegistry()``（位置
+    ``%LOCALAPPDATA%\\LuminaSelect\\catalogs.db``）并在启动时登记当前项目
+    （默认 ``config.DEFAULT_DB`` = 仓库内 ``data/cull.db``）。若不隔离：
+      * 跑一次测试就往**用户真实**的 %LOCALAPPDATA% 写入一堆 tmp 项目；
+      * 仓库内 ``data/cull.db`` 被创建后，「默认库本来就存在」恒为真，
+        入口页会多出一张幽灵卡片，污染与"项目数"有关的断言。
+    这里把两者都指到会话级临时目录，测试之间互不干扰。
+    """
+    from engine import config
+
+    fake_local = tmp_path_factory.mktemp("localappdata")
+    fake_data = tmp_path_factory.mktemp("lumina_data")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_local))
+    monkeypatch.setattr(config, "DEFAULT_DB", str(fake_data / "cull.db"))
+    yield fake_local
+
+
 @pytest.fixture()
 def tmp_db_path(tmp_path):
     """临时 SQLite 路径（每次测试独立）。"""

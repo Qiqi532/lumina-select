@@ -77,4 +77,22 @@ QLineEdit {{
 }}
 QLineEdit:focus {{ border: 2px solid {color['accent']}; }}
 QStatusBar {{ background-color: {color['surface']}; color: {color['muted']}; }}
+QFrame#ProjectCard {{
+    background-color: {color['card']};
+    border: 1px solid {color['border']};
+    border-radius: 10px;
+}}
+QFrame#ProjectCard:hover {{ border-color: {color['accent']}; }}
+QLabel#CardTitle {{ font-size: 15px; font-weight: 700; }}
+QLabel#CardMeta {{ color: {color['muted']}; }}
+QLabel#CardWarn {{ color: {color['warning']}; }}
+QPushButton#CardForget {{
+    background: transparent;
+    border: 1px solid {color['border']};
+    border-radius: 6px;
+    padding: 1px 8px;
+    color: {color['muted']};
+}}
+QPushButton#CardForget:hover {{ border-color: {color['danger']}; color: {color['danger']}; }}
+QScrollArea {{ background: transparent; }}
 """

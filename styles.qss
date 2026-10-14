@@ -55,3 +55,21 @@ QLineEdit {
 }
 QLineEdit:focus { border: 2px solid #D7AA5A; }
 QStatusBar { background-color: #181B1E; color: #9299A1; }
+QFrame#ProjectCard {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 10px;
+}
+QFrame#ProjectCard:hover { border-color: #D7AA5A; }
+QLabel#CardTitle { font-size: 15px; font-weight: 700; }
+QLabel#CardMeta { color: #9299A1; }
+QLabel#CardWarn { color: #DFB970; }
+QPushButton#CardForget {
+    background: transparent;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 1px 8px;
+    color: #9299A1;
+}
+QPushButton#CardForget:hover { border-color: #D46A6A; color: #D46A6A; }
+QScrollArea { background: transparent; }

@@ -99,7 +99,11 @@ def test_every_mutating_command_declares_undoable(registry):
 
 
 # 需要"真实上下文"才能执行的命令：合成参数给不出，只能接受它**说清原因地失败**。
-_NEEDS_REAL_CONTEXT = {"cleanup.rejected"}
+# 值 = 失败信息里必须出现的线索，防止以后变成一句没信息量的 "failed"。
+_NEEDS_REAL_CONTEXT = {
+    "cleanup.rejected": "project_dir",
+    "collection.delete": "集合",
+}
 
 
 def test_every_mutating_command_actually_undoes(registry, store):
@@ -120,10 +124,11 @@ def test_every_mutating_command_actually_undoes(registry, store):
             }, f"{spec.name} 意外失败：{result.error}"
             message = result.error.message or ""
             if spec.name in _NEEDS_REAL_CONTEXT:
-                # 【T-10】cleanup.rejected 需要"照片所在的项目目录"才能决定隔离目录
-                # 放哪 —— 这是合成参数给不出的真实上下文。它必须**说清楚为什么失败**，
-                # 绝不能静默 no-op；可撤销性由 test_batch_cleanup.py 单独验收。
-                assert "project_dir" in message, \
+                # 【T-10/T-09】cleanup.rejected 需要"照片所在的项目目录"、
+                # collection.delete 需要一个真实存在的集合 id —— 都是合成参数
+                # 给不出的真实上下文。它们必须**说清楚为什么失败**，绝不能静默
+                # no-op；可撤销性由各自的专项测试单独验收。
+                assert _NEEDS_REAL_CONTEXT[spec.name] in message, \
                     f"{spec.name} 失败必须说明缺什么，实际：{message}"
                 continue
             # 人物命令属"未接线"（NotImplementedError），其可撤销性在 T-15 验收。

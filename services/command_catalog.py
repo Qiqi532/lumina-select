@@ -30,6 +30,7 @@ from typing import Any, Mapping
 from engine.store import PhotoStore
 
 from .commands import CommandRegistry, CommandSpec
+from .collection_service import CollectionService
 from .contracts import EventName, RiskLevel
 from .quarantine import QuarantineResult, quarantine_files, restore_quarantine
 
@@ -382,29 +383,74 @@ def register_core_commands(registry: CommandRegistry, store: PhotoStore) -> None
             "required": ["name"],
             "properties": {
                 "name": {"type": "string"},
-                "paths": _PATHS_PARAM,
+                # 条件树（与 services/query_builder 同构）。省略 = 全部照片。
+                "condition": {"type": "object", "nullable": True},
+                "description": {"type": "string"},
             },
         },
         events=(EventName.COLLECTION_SAVED,),
-        returns="{'name': str, 'count': int}",
+        returns="{'id': int, 'name': str, 'count': int, 'created': bool}",
     )
     def _collection_save(params: Mapping[str, Any]) -> Any:
         name = str(params["name"])
-        paths = [str(path) for path in params.get("paths") or ()]
-        # 集合表（T-09）尚未落地；先把偏好里记一份名称，撤销即移除。
-        key = f"collection.name.{name}"
-        previous = store.get_preference(key)
-        store.set_preference(key, "1")
+        condition = params.get("condition")
+        description = str(params.get("description") or "")
+        # 【T-09】集合表已落地：存**条件树**而不是照片清单。
+        # 存清单会过期（分析新照片后集合里没有它们），存条件则每次重新求值。
+        service = CollectionService(store)
+        # 撤销前先留一份原状：同名已存在就记下整行，不存在就记 None。
+        existing = store.get_collection_by_name(name)
+        saved = service.save(name, condition, description=description)
 
         def revert() -> None:
-            # 原来没有这个键就删掉，而不是写空串 —— 否则撤销后的状态是 ""，
-            # 与"从未保存过"（None）对不上。
-            if previous is None:
-                store.clear_preference(key)
+            if existing is None:
+                store.delete_collection(saved["id"])
             else:
-                store.set_preference(key, previous)
+                # 覆盖式保存的撤销 = 把名字/条件/描述原样改回去
+                store.update_collection(
+                    int(existing["id"]),
+                    name=existing["name"],
+                    condition=existing["condition"],
+                    description=existing.get("description") or "",
+                )
 
-        return ({"name": name, "count": len(paths)}, revert)
+        return (
+            {
+                "id": saved["id"],
+                "name": saved["name"],
+                "count": saved["count"],
+                "created": saved["created"],
+                "event_payload": {"name": saved["name"], "count": saved["count"]},
+            },
+            revert,
+        )
+
+    # ==================================================================
+    # 【T-09】collection.delete —— 删集合（可撤销：原样插回）
+    # ==================================================================
+    @registry.command(
+        "collection.delete",
+        mutates=True,
+        risk=RiskLevel.LOW,
+        summary="删除一个智能集合（不影响照片本身，可撤销）",
+        params_schema={
+            "type": "object",
+            "required": ["id"],
+            "properties": {"id": {"type": "integer", "description": "集合 id"}},
+        },
+        events=(),
+        returns="{'id': int, 'name': str}",
+    )
+    def _collection_delete(params: Mapping[str, Any]) -> Any:
+        collection_id = int(params["id"])
+        removed = store.delete_collection(collection_id)
+        if removed is None:
+            raise ValueError(f"集合不存在：{collection_id}")
+
+        def revert() -> None:
+            store.restore_collection(removed)
+
+        return ({"id": collection_id, "name": str(removed["name"])}, revert)
 
     # ==================================================================
     # export.run  —— high risk：会写外部文件，不可自动撤销

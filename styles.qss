@@ -199,3 +199,25 @@ QPushButton#DangerButton {
 }
 QPushButton#DangerButton:hover { background-color: #D46A6A; color: #0F1113; }
 QPushButton#DangerButton:disabled { color: #303338; border-color: #303338; }
+
+/* ---- 【T-09】智能集合面板 ---- */
+QWidget#CollectionPanel {
+    background-color: #16191C;
+    border: 1px solid #303338;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+QListWidget#CollectionList {
+    background-color: transparent;
+    border: none;
+    font-size: 12px;
+}
+QListWidget#CollectionList::item {
+    padding: 3px 6px;
+    border-radius: 6px;
+}
+QListWidget#CollectionList::item:hover { background-color: #1C1F22; }
+QListWidget#CollectionList::item:selected {
+    background-color: #D7AA5A;
+    color: #0F1113;
+}

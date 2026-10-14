@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from engine import store
+from engine.migrations import LATEST_SCHEMA_VERSION
 
 
 def _photo(path, **kw):
@@ -13,9 +14,9 @@ def _photo(path, **kw):
 
 def test_schema_version_is_idempotent(tmp_db_path):
     with store.PhotoStore(tmp_db_path, enable_wal=False) as first:
-        assert first.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert first.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
     with store.PhotoStore(tmp_db_path, enable_wal=False) as second:
-        assert second.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert second.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
 
 
 def test_upsert_and_incremental_update(tmp_db_path):

@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from engine import migrations
+from engine.migrations import LATEST_SCHEMA_VERSION
 from engine.store import PhotoStore
 
 
@@ -29,7 +30,7 @@ def test_v04_database_upgrades_without_losing_manual_decisions(tmp_path):
         row = store.get_photo("C:/photos/IMG_0001.CR3")
         assert row["star"] == 4
         assert row["label"] == "P"
-        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
         columns = {
             item["name"] for item in store.conn.execute("PRAGMA table_info(photos)")
         }
@@ -49,7 +50,7 @@ def test_v04_database_upgrades_without_losing_manual_decisions(tmp_path):
         assert {"face_regions", "export_items", "ui_preferences"} <= tables
 
     with PhotoStore(str(db_path), enable_wal=False) as reopened:
-        assert reopened.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert reopened.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
         assert reopened.get_photo("C:/photos/IMG_0001.CR3")["star"] == 4
 
 
@@ -65,7 +66,7 @@ def test_failed_migration_rolls_back_and_keeps_backup(tmp_path, monkeypatch):
     with pytest.raises(migrations.MigrationError, match="simulated migration failure"):
         PhotoStore(str(db_path), enable_wal=False)
 
-    backups = list(tmp_path.glob("broken-upgrade.db.pre-v05*.bak"))
+    backups = list(tmp_path.glob("broken-upgrade.db.pre-v*.bak"))
     assert len(backups) == 1
     connection = sqlite3.connect(db_path)
     assert connection.execute("SELECT star FROM photos").fetchone()[0] == 4
@@ -77,7 +78,7 @@ def test_new_database_starts_at_latest_schema(tmp_path):
     db_path = tmp_path / "new.db"
 
     with PhotoStore(str(db_path), enable_wal=False) as store:
-        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
         indexes = {
             item[0]
             for item in store.conn.execute(

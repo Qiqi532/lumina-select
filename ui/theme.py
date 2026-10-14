@@ -227,4 +227,25 @@ QPushButton#DangerButton:disabled {{
     color: {color['border']};
     border-color: {color['border']};
 }}
+/* ---- 【T-09】智能集合面板 ---- */
+QWidget#CollectionPanel {{
+    background-color: {color['surface']};
+    border: 1px solid {color['border']};
+    border-radius: 8px;
+    padding: 4px 6px;
+}}
+QListWidget#CollectionList {{
+    background-color: transparent;
+    border: none;
+    font-size: 12px;
+}}
+QListWidget#CollectionList::item {{
+    padding: 3px 6px;
+    border-radius: 6px;
+}}
+QListWidget#CollectionList::item:hover {{ background-color: {color['card']}; }}
+QListWidget#CollectionList::item:selected {{
+    background-color: {color['accent']};
+    color: {color['background']};
+}}
 """

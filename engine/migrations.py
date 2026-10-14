@@ -6,7 +6,7 @@ import sqlite3
 from typing import Callable
 
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 
 class MigrationError(RuntimeError):
@@ -91,6 +91,7 @@ def _create_supporting_schema(connection: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS ui_preferences ("
         "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
+    _create_collections_table(connection)
 
 
 def _ensure_photo_columns(connection: sqlite3.Connection) -> None:
@@ -100,6 +101,25 @@ def _ensure_photo_columns(connection: sqlite3.Connection) -> None:
     for name, declaration in PHOTO_COLUMNS:
         if name not in existing:
             connection.execute(f'ALTER TABLE photos ADD COLUMN "{name}" {declaration}')
+
+
+def _create_collections_table(connection: sqlite3.Connection) -> None:
+    """【T-09】智能集合表。
+
+    ``condition`` 存的是 **JSON 条件树**（与 ``services/query_builder`` 同构），
+    不是 SQL —— 存 SQL 会让"改字段白名单"变成一次数据迁移，等于把代码问题
+    升级成数据问题。``name`` 唯一，因为同名集合对用户没有意义，只会让他
+    分不清哪个是哪个。
+    """
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS collections ("
+        "id INTEGER PRIMARY KEY, "
+        "name TEXT NOT NULL UNIQUE, "
+        "condition TEXT NOT NULL, "
+        "description TEXT, "
+        "created_at REAL NOT NULL, "
+        "updated_at REAL NOT NULL)"
+    )
 
 
 def _create_indexes(connection: sqlite3.Connection) -> None:
@@ -115,7 +135,19 @@ def _migrate_to_v5(connection: sqlite3.Connection) -> None:
     _create_indexes(connection)
 
 
-MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {5: _migrate_to_v5}
+def _migrate_to_v6(connection: sqlite3.Connection) -> None:
+    """v5 → v6：新增智能集合表（T-09）。
+
+    升级前已由 :func:`migrate_database` 整库备份，这里只做**加表**，不碰
+    photos 的任何一行 —— 照片数与人工决策零丢失由备份演练用例守住。
+    """
+    _create_collections_table(connection)
+
+
+MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    5: _migrate_to_v5,
+    6: _migrate_to_v6,
+}
 
 
 def _create_latest_schema(connection: sqlite3.Connection) -> None:
@@ -126,10 +158,10 @@ def _create_latest_schema(connection: sqlite3.Connection) -> None:
 
 
 def _backup_path(db_path: Path) -> Path:
-    candidate = db_path.with_name(f"{db_path.name}.pre-v05.bak")
+    candidate = db_path.with_name(f"{db_path.name}.pre-v{LATEST_SCHEMA_VERSION:02d}.bak")
     suffix = 1
     while candidate.exists():
-        candidate = db_path.with_name(f"{db_path.name}.pre-v05-{suffix}.bak")
+        candidate = db_path.with_name(f"{db_path.name}.pre-v{LATEST_SCHEMA_VERSION:02d}-{suffix}.bak")
         suffix += 1
     return candidate
 
@@ -166,7 +198,11 @@ def migrate_database(connection: sqlite3.Connection, db_path: str | Path) -> Pat
             raise MigrationError(f"failed to create database schema: {exc}") from exc
     if current == 0:
         current = 4
-    if current != 4:
+    # 【T-09】原来是 ``if current != 4: raise`` —— 那是 LATEST=5 时代留下的，
+    # 隐含假设"所有真实库都是 v4"。抬高 LATEST 到 6 之后，**每一个 v5 的库
+    # 都会撞上这条被拒绝打开**（用户手上的库全是 v5）。改成"低于 v4 才拒绝"，
+    # 让 4/5/6… 都能按 MIGRATIONS 逐级走到最新。
+    if current < 4:
         raise MigrationError(f"unsupported database schema version: {current}")
 
     backup_path = _backup_database(connection, path)

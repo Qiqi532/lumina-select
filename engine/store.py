@@ -17,6 +17,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 import sqlite3
 import time
@@ -647,6 +648,100 @@ class PhotoStore:
             self._row_to_dict(row)
             for row in self.conn.execute(
                 "SELECT * FROM face_regions WHERE path=? ORDER BY face_index", (path,)
+            ).fetchall()
+        ]
+
+    # ------------------------------------------------------------------
+    # 【T-09】智能集合
+    # ------------------------------------------------------------------
+    def create_collection(
+        self, name: str, condition: str, *, description: str = ""
+    ) -> int:
+        """新建一个集合，返回其 id。
+
+        ``condition`` 是 **JSON 条件树字符串**（与 ``services/query_builder``
+        同构）—— 存 JSON 而不是 SQL，是为了让以后改字段白名单只动代码，
+        不必动用户数据。
+        """
+        now = time.time()
+        cursor = self.conn.execute(
+            "INSERT INTO collections (name, condition, description, "
+            "created_at, updated_at) VALUES (?,?,?,?,?)",
+            (str(name), str(condition), str(description or ""), now, now),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid or 0)
+
+    def update_collection(
+        self,
+        collection_id: int,
+        *,
+        name: str | None = None,
+        condition: str | None = None,
+        description: str | None = None,
+    ) -> bool:
+        updates: list[str] = []
+        arguments: list[object] = []
+        for column, value in (
+            ("name", name), ("condition", condition), ("description", description)
+        ):
+            if value is not None:
+                updates.append(f"{column}=?")
+                arguments.append(str(value))
+        if not updates:
+            return False
+        arguments.extend([time.time(), int(collection_id)])
+        cursor = self.conn.execute(
+            f"UPDATE collections SET {', '.join(updates)}, updated_at=? WHERE id=?",
+            arguments,
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_collection(self, collection_id: int) -> dict | None:
+        """删除集合，**返回被删的那一行**以便撤销能原样插回。"""
+        row = self.get_collection(collection_id)
+        if row is None:
+            return None
+        cursor = self.conn.execute(
+            "DELETE FROM collections WHERE id=?", (int(collection_id),)
+        )
+        self.conn.commit()
+        return row if cursor.rowcount else None
+
+    def restore_collection(self, row: Mapping[str, object]) -> None:
+        """把 :meth:`delete_collection` 返回的行原样插回（含原 id）。"""
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO collections (id, name, condition, description, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                (
+                    int(row["id"]),
+                    str(row["name"]),
+                    str(row["condition"]),
+                    row.get("description") or "",
+                    float(row.get("created_at") or 0),
+                    float(row.get("updated_at") or 0),
+                ),
+            )
+
+    def get_collection(self, collection_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM collections WHERE id=?", (int(collection_id),)
+        ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def get_collection_by_name(self, name: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM collections WHERE name=?", (str(name),)
+        ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def collections(self) -> list[dict]:
+        return [
+            self._row_to_dict(row)
+            for row in self.conn.execute(
+                "SELECT * FROM collections ORDER BY updated_at DESC, id DESC"
             ).fetchall()
         ]
 

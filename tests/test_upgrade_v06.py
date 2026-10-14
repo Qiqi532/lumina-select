@@ -49,7 +49,10 @@ def test_legacy_schema_upgrade_is_reported_with_backup_path(tmp_path):
 
         assert report["schema_upgraded"] is True
         assert report["backup_path"], "升级前必须留备份，且路径要能报给用户"
-        assert tmp_path.joinpath("legacy.db.pre-v05.bak").exists()
+        # 备份名跟随 LATEST_SCHEMA_VERSION（v6 起是 pre-v06）—— 写死 v05 会在
+        # 每次抬版本号时假失败一次。
+        backups = list(tmp_path.glob("legacy.db.pre-v*.bak"))
+        assert backups, "升级前必须留备份，且路径要能报给用户"
         assert report["needs_attention"] is True
         # 人工决策一条不少（2 条：一条标星、一条判废）
         assert report["decision_count"] == 2

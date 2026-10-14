@@ -275,7 +275,9 @@ class TestPendingCommandsExplainThemselves:
             qtbot.addWidget(page)
             notices = []
             page.notice_requested.connect(notices.append)
-            for command in ("search", "command-palette", "save-collection",
+            # 注：save-collection（Ctrl+B）已随 T-09 落地，不再属于"未接线"，
+            # 因此不在这个列表里 —— 它现在会弹出命名对话框（不在本用例范围内）。
+            for command in ("search", "command-palette",
                             "goto-face-group", "assign-person"):
                 page._command(command)
                 assert notices, f"{command} 静默 no-op 了"

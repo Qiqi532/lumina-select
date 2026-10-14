@@ -12,6 +12,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -21,6 +22,11 @@ from PySide6.QtWidgets import (
 )
 
 from engine.store import PhotoStore
+from services.collection_service import (
+    CollectionService,
+    count_for_condition,
+    describe_condition,
+)
 from services.review_service import ReviewFilter, ReviewService
 from ui.review.batch_bar import BatchBar
 from ui.review.canvas import CanvasWidget
@@ -29,6 +35,7 @@ from ui.review.filmstrip import FilmstripModel, FilmstripView
 from ui.review.filters import FilterSidebar
 from ui.review.inspector import InspectorWidget
 from ui.review.shortcuts import install_review_shortcuts
+from ui.review.smart_collections import CollectionPanel
 
 
 class ReviewPage(QWidget):
@@ -58,6 +65,8 @@ class ReviewPage(QWidget):
         # ReviewService 管"审片队列/导航/撤销"，FacetModel 管"按 EXIF/评级收窄"。
         # 两者都只读 DB，写由 services/commands.py 收口（N1）。
         self.facets = FacetModel(store)
+        # 【T-09】集合服务：读集合、算实时计数。写仍走命令表（N1）。
+        self.collections = CollectionService(store)
         self._updating = False
         self._stopped = False
         self._save_timer = QTimer(self)
@@ -77,7 +86,18 @@ class ReviewPage(QWidget):
         self.sidebar.filter_selected.connect(self._filter_selected)
         self.sidebar.facet_toggled.connect(self._facet_toggled)
         self.sidebar.facet_cleared.connect(self._facet_cleared)
-        self.splitter.addWidget(self.sidebar)
+        # 【T-09】集合面板挂在筛选条下方，共用左侧栏（都是"收窄范围"的动作）。
+        self.collections_panel = CollectionPanel()
+        self.collections_panel.save_requested.connect(self._save_collection)
+        self.collections_panel.applied.connect(self._apply_collection)
+        self.collections_panel.delete_requested.connect(self._delete_collection)
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        left_layout.addWidget(self.sidebar, 1)
+        left_layout.addWidget(self.collections_panel)
+        self.splitter.addWidget(left_panel)
 
         middle = QWidget()
         middle_layout = QVBoxLayout(middle)
@@ -189,6 +209,7 @@ class ReviewPage(QWidget):
         self.sidebar.set_facets(self.facets.facets_snapshot())
         self.sidebar.set_scope_label(self.facets.scope_label())
         self.sidebar.set_summary(self.facets.count(), has_filters=self.facets.has_filters)
+        self._refresh_collections()
         if current is None:
             self.canvas.set_items([], self.review.view_mode)
             self.inspector.set_item({}, [])
@@ -254,6 +275,90 @@ class ReviewPage(QWidget):
             )
         finally:
             self._updating = False
+
+    # ------------------------------------------------------------------
+    # 【T-09】智能集合
+    # ------------------------------------------------------------------
+    def _collection_rows(self) -> list[dict]:
+        """集合列表 + 实时计数 + 路径（供点选后切作用域）。"""
+        if self.collections is None:
+            return []
+        rows = []
+        for row in self.collections.list():
+            row["paths"] = self.collections.paths(int(row["id"]))
+            rows.append(row)
+        return rows
+
+    def _refresh_collections(self) -> None:
+        self.collections_panel.refresh(self._collection_rows())
+
+    def _save_collection(self) -> None:
+        """把**当前筛选条件**存成集合（不是当前照片清单）。"""
+        if self.commands is None or self.collections is None:
+            self.notice_requested.emit("命令表不可用，无法保存集合")
+            return
+        condition = self.facets.condition_tree()
+        preview = count_for_condition(
+            self.review.store, condition, scope=self.facets.scope
+        )
+        name, accepted = QInputDialog.getText(
+            self,
+            "保存为集合",
+            f"当前条件将命中 {preview} 张照片。\n"
+            "集合保存的是**条件**（之后分析的新照片会自动纳入），不是照片清单。",
+            text="",
+        )
+        if not accepted or not name.strip():
+            return
+        result = self.commands.execute(
+            "collection.save",
+            {
+                "name": name.strip(),
+                "condition": condition,
+                "description": describe_condition(condition) if condition else "",
+            },
+        )
+        if not result.ok:
+            self.notice_requested.emit(
+                f"保存集合失败：{result.error.message if result.error else result}"
+            )
+            return
+        value = result.value if isinstance(result.value, dict) else {}
+        self.notice_requested.emit(
+            f"已保存集合「{value.get('name')}」· {value.get('count')} 张"
+        )
+        self._refresh_collections()
+
+    def _apply_collection(self, scope: dict) -> None:
+        self.facets.set_scope(scope)
+        self.refresh()
+
+    def _delete_collection(self, collection_id: int) -> None:
+        if self.commands is None:
+            self.notice_requested.emit("命令表不可用，无法删除集合")
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除集合",
+            "删除这个集合？\n照片本身不会受影响（集合只是一组条件）。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        result = self.commands.execute("collection.delete", {"id": collection_id})
+        if not result.ok:
+            self.notice_requested.emit(
+                f"删除失败：{result.error.message if result.error else result}"
+            )
+            return
+        # 若当前正停在这个集合里，删掉后要把作用域退回全部照片，
+        # 否则用户会卡在一个已不存在的集合里，看到 0 张却不明白为什么。
+        current_scope = self.facets.scope or {}
+        if current_scope.get("kind") == "collection" and current_scope.get("id") == collection_id:
+            self.facets.set_scope(None)
+        self._refresh_collections()
+        self.refresh()
 
     def _update_batch_bar(self) -> None:
         self.batch_bar.set_selection_count(len(self.review.selection))
@@ -411,6 +516,9 @@ class ReviewPage(QWidget):
         elif command == "export":
             self.navigate_requested.emit("export")
             return
+        elif command == "save-collection":
+            self._save_collection()
+            return
         else:
             self._command_pending(command)
             return
@@ -424,7 +532,6 @@ class ReviewPage(QWidget):
         reasons = {
             "search": "搜索（Ctrl+F）将在 T-12 规模优化后随虚拟滚动一起上线",
             "command-palette": "命令面板（Ctrl+K）是未来 Agent 入口，本期只做架构接缝（T-06），功能未开放",
-            "save-collection": "存为集合（Ctrl+B）依赖智能集合，见 T-09",
             "goto-face-group": "跳到人脸组（Ctrl+Shift+N）依赖人物线，见 T-15",
             "assign-person": "归属人物（T）依赖人物线，见 T-15",
         }

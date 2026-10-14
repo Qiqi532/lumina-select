@@ -4,7 +4,7 @@
 #
 # 与旧的 光影选片助手.spec（仅打包 launcher.py，运行时还要调 .venv 里的
 # python 启动 app_qt.py）不同，本 spec 直接以 app_qt.py 为入口，把全部第三方
-# 依赖（torch / transformers / PyQt6 / mediapipe / 等）一并打进 onedir 文件夹，
+# 依赖（torch / transformers / PySide6 / mediapipe / 等）一并打进 onedir 文件夹，
 # 双击 dist/光影选片助手/光影选片助手.exe 即可运行，无需项目 .venv 与源码在场。
 #
 # 模型权重（CLIP / 闭眼 ViT / MediaPipe）不打包，首次运行时通过 HF 镜像下载到
@@ -67,7 +67,7 @@ hiddenimports = [
     'transformers.models.vit.configuration_vit',
     'transformers.models.vit.image_processing_vit',
     'transformers.models.vit.modeling_vit',
-    'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets',
+    'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets', 'shiboken6',
     'mediapipe', 'mediapipe.python.solutions.face_mesh',
     'absl.logging', 'PIL.Image', 'cv2', 'imagehash',
     'ui.main_window', 'ui.pages.review_page', 'ui.pages.export_page',
@@ -88,9 +88,12 @@ a = Analysis(
         # MediaPipe solutions/__init__.py 实际导入 drawing_utils -> matplotlib.pyplot。
         'pyiqa', 'timm', 'sklearn', 'tensorboard', 'wandb',
         'torchaudio',
-        # 环境中同时存在 PyQt5（conda 自带，mediapipe 间接依赖）与 PyQt6，
-        # PyInstaller 禁止同时打包两个 Qt 绑定 —— 本应用只用 PyQt6
-        'PyQt5', 'PySide2', 'PySide6', 'shiboken2', 'shiboken6',
+        # 环境中同时存在 PyQt5（conda 自带，mediapipe 间接依赖）与 PySide6，
+        # PyInstaller 禁止同时打包两个 Qt 绑定 —— 本应用只用 PySide6。
+        # ⚠️ 绝不能排除 shiboken6：它是 PySide6 的**必需**依赖
+        #    （PySide6/__init__.py 要 `from shiboken6 import Shiboken`），
+        #    排除后冻结态会在启动时抛 ImportError。仅排除 PyQt/PySide2 的绑定。
+        'PyQt5', 'PyQt6', 'PySide2', 'shiboken2',
         # conda base 里的重型可选依赖：transformers/mediapipe 的 try-import 链
         # 会被 PyInstaller 静态分析拖进包里（实测 tensorflow 1GB + 其余约 1GB），
         # 运行时验证过全部不需要 —— 排除后瘦身约一半

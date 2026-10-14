@@ -69,6 +69,10 @@ class AnalyzePage(QWidget):
     succeeded = Signal(dict)
     failed = Signal(str)
     cancelled = Signal()
+    # 【T-07】把 worker 的进度与终态**同时**抛给统一任务中心。
+    # 保留上面三个信号完全不变（既有调用方零影响），只做加法。
+    progress = Signal(str, int, int)
+    finished = Signal(str, object)   # (终态名, 附加信息) —— succeeded/failed/cancelled
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -118,21 +122,25 @@ class AnalyzePage(QWidget):
     def _on_progress(self, phase: str, done: int, total: int) -> None:
         self.stage_label.setText(f"{phase} · {done}/{total}")
         self.progress_bar.setValue(round(done * 100 / total) if total else 0)
+        self.progress.emit(phase, done, total)
 
     def _on_success(self, result: dict) -> None:
         self.cancel_button.setEnabled(False)
         self.stage_label.setText("分析完成，等待人工复核")
         self.succeeded.emit(result)
+        self.finished.emit("succeeded", result)
 
     def _on_failure(self, message: str) -> None:
         self.cancel_button.setEnabled(False)
         self.stage_label.setText("分析失败；可重试")
         self.failed.emit(message)
+        self.finished.emit("failed", message)
 
     def _on_cancelled(self) -> None:
         self.cancel_button.setEnabled(False)
         self.stage_label.setText("分析已取消，可重新开始")
         self.cancelled.emit()
+        self.finished.emit("cancelled", None)
 
     def cancel(self) -> None:
         if self.worker is not None and self.worker.isRunning():

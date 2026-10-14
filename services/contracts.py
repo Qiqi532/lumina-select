@@ -141,6 +141,32 @@ class EventName(StrEnum):
     EXPORT_FINISHED = "export.finished"
     CLEANUP_REJECTED = "cleanup.rejected"
     COMMAND_UNDONE = "command.undone"
+    # 【T-07】任务中心生命周期事件 —— 让 UI 与未来 Agent 都能订阅"在干什么"。
+    TASK_STARTED = "task.started"
+    TASK_PROGRESS = "task.progress"
+    TASK_SUCCEEDED = "task.succeeded"
+    TASK_FAILED = "task.failed"
+    TASK_CANCELLED = "task.cancelled"
+
+
+class TaskState(StrEnum):
+    """任务生命周期状态。
+
+    【为什么是一个显式状态机而不是几个 bool】"运行中/已完成/已取消"若有多个
+    bool 表达，就会出现矛盾组合（``running=True, done=True``）——调用方必须
+    自己判断哪个优先。单一枚举让非法状态**无法表示**。
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    @property
+    def is_terminal(self) -> bool:
+        """是否已结束（不再变化）。UI 据此决定要不要把任务移出"进行中"列表。"""
+        return self in (TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED)
 
 
 __all__ = [
@@ -151,4 +177,5 @@ __all__ = [
     "CommandResult",
     "EventRecord",
     "EventName",
+    "TaskState",
 ]

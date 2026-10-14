@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -40,11 +40,14 @@ from engine.catalog_registry import CatalogRegistry, read_photo_count
 from engine.log import get_logger
 from engine.store import PhotoStore
 from services.command_catalog import build_registry
+from services.events import EventBus
+from services.task_center import TaskCenter
 from .pages.analyze_page import AnalyzePage
 from .pages.export_page import ExportPage
 from .pages.import_page import ImportPage
 from .pages.library_page import LibraryPage
 from .pages.review_page import ReviewPage
+from .task_panel import TaskPanel
 
 _log = get_logger("ui.main")
 
@@ -57,6 +60,9 @@ STAGES = (
 )
 
 LIBRARY_PAGE = "library"
+
+# 【T-07】分析任务的稳定名称 —— 取消时用它把 Task 与 AnalyzeWorker 对上。
+_ANALYZE_TASK_NAME = "分析照片"
 
 
 class MainWindow(QMainWindow):
@@ -90,6 +96,11 @@ class MainWindow(QMainWindow):
         # 【T-06】命令注册表：UI 的写操作全部经它执行（N1）。
         # 它是"未来 Agent 的唯一入口"在本期的形态 —— UI 与 Agent 走同一条路。
         self.commands = build_registry(self.store)
+        # 【T-07】统一任务中心 + 进程内事件总线。
+        # 事件总线是"正在发生什么"的唯一广播口：UI 与未来 Agent 都订阅它，
+        # 而不是各自轮询 Task 对象 —— 保证两边看到同一份事实。
+        self.events = EventBus()
+        self.tasks = TaskCenter()
         self.current_stage_name = "import"
         self._project_pages: dict[str, QWidget] = {}
 
@@ -157,8 +168,20 @@ class MainWindow(QMainWindow):
         self.export_page: ExportPage | None = None
         self._install_project_pages()
         root_layout.addWidget(self.stack, 1)
+        # 【T-07】底部任务面板：所有长任务的统一进度/取消入口。
+        self.task_panel = TaskPanel(self.tasks)
+        self.task_panel.cancel_requested.connect(self.cancel_task)
+        root_layout.addWidget(self.task_panel)
         self.setCentralWidget(root)
         self.statusBar().showMessage("项目已保存 · 照片仅在本机处理")
+
+        # 【T-07】UI 线程泵：worker 线程只把事件入队，由这里的定时器在 UI 线程
+        # 一次性发布到事件总线 —— 保证订阅者（含未来的 Agent 桥）总在 UI 线程
+        # 被回调，可安全更新 Qt 控件。250ms 足够跟上人眼，且开销可忽略。
+        self._task_pump = QTimer(self)
+        self._task_pump.setInterval(250)
+        self._task_pump.timeout.connect(self._pump_tasks)
+        self._task_pump.start()
 
         self.library_page.open_project.connect(self.open_project)
         self.library_page.create_project.connect(self.create_project)
@@ -167,6 +190,10 @@ class MainWindow(QMainWindow):
         self.analyze_page.succeeded.connect(self._analysis_succeeded)
         self.analyze_page.failed.connect(self.show_error)
         self.analyze_page.cancelled.connect(lambda: self.status("分析已取消"))
+        # 【T-07】分析 worker 的进度/结果落到统一任务中心 —— 面板与事件总线
+        # 因此不必知道"分析"这个具体业务，只认"任务"这一层抽象。
+        self.analyze_page.progress.connect(self._analysis_progress)
+        self.analyze_page.finished.connect(self._analysis_finished)
 
         self.register_current_project(touch=True, skip_unused_default=True)
         if self.start_in_library:
@@ -327,6 +354,13 @@ class MainWindow(QMainWindow):
         self.project_path = new_store.db_path
         # 命令表绑定的是 store，换项目必须重建 —— 否则命令会写进上一个项目库。
         self.commands = build_registry(new_store)
+        # 【T-07】换项目时清空任务中心：上一个项目的"已完成任务"对新项目是噪音，
+        # 而它的 store 也即将关闭，任务的 payload 不再可解释。进行中的任务
+        # 已在上面被 export 的 shutdown 拦住（不允许带着未完成任务切项目）。
+        self.tasks.clear()
+        self._analysis_task = None
+        if hasattr(self, "task_panel"):
+            self.task_panel.refresh()
         # 顺序要紧：先让旧页面退场（它们还持有旧 store），再关旧连接。
         # 反过来会在 shutdown 里对已关闭的库做操作，日志刷一堆无用的 WARNING。
         self._install_project_pages()
@@ -417,7 +451,67 @@ class MainWindow(QMainWindow):
             self.show_error(f"无法记录来源目录：{result.error.message if result.error else result}")
             return
         self.goto("analyze")
+        # 【T-07】登记一个可取消任务，然后启动 worker。任务 id 记在实例上，
+        # 以便进度/终态回调能对上同一条任务。
+        self._analysis_task = self.tasks.register(_ANALYZE_TASK_NAME, cancelable=True)
+        self.tasks.start(self._analysis_task, "准备分析…")
+        self._pump_tasks()
         self.analyze_page.start(str(source_path), self.store.db_path)
+
+    # ------------------------------------------------------------------
+    # 【T-07】统一任务中心的接线
+    # ------------------------------------------------------------------
+    def _analysis_progress(self, phase: str, done: int, total: int) -> None:
+        task = getattr(self, "_analysis_task", None)
+        if task is None:
+            return
+        # total 未知时先不设，避免进度条给出假的百分比；一旦知道就补上。
+        if total and not task.total:
+            task.total = int(total)
+        self.tasks.progress(task, done, str(phase))
+        self._pump_tasks()
+
+    def _analysis_finished(self, state: str, info) -> None:
+        task = getattr(self, "_analysis_task", None)
+        if task is None:
+            return
+        if state == "succeeded":
+            self.tasks.succeed(task, info if isinstance(info, dict) else None)
+        elif state == "cancelled":
+            self.tasks.cancel(task)
+        else:
+            self.tasks.fail(task, info or "分析失败")
+        self._analysis_task = None
+        self._pump_tasks()
+
+    def cancel_task(self, task_id: str) -> None:
+        """请求取消一个任务。
+
+        这里做两件事，顺序要紧：
+          1. 通过 TaskCenter 置位 ``cancel_requested``（协议层，worker 会在
+             安全点看到它并优雅收尾）；
+          2. 若该任务对应分析 worker，同时调用 worker.cancel() 触发 Qt 的
+             中断请求（双保险：pipeline 的 cancel_check 两个来源都会看）。
+        """
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        if not self.tasks.request_cancel(task):
+            return
+        worker = getattr(self.analyze_page, "worker", None)
+        if task.name == _ANALYZE_TASK_NAME and worker is not None and worker.isRunning():
+            worker.cancel()
+        self.status(f"正在安全取消：{task.name}…")
+        self._pump_tasks()
+
+    def _pump_tasks(self) -> None:
+        """把任务中心待发布的事件转成事件总线事件，并刷新面板。
+
+        **必须在 UI 线程调用** —— 这样所有事件订阅者都在 UI 线程被回调，
+        Qt 控件可以安全更新（worker 线程不得直接碰控件）。
+        """
+        self.tasks.drain_events(self.events.publish)
+        self.task_panel.refresh()
 
     def _analysis_succeeded(self, result: dict) -> None:
         self.goto("review")
@@ -516,6 +610,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         worker = self.analyze_page.worker
         if worker is not None and worker.isRunning():
+            task = getattr(self, "_analysis_task", None)
+            if task is not None:
+                self.tasks.request_cancel(task)
             worker.cancel()
             if not worker.wait(5000):
                 self.show_error("分析仍在安全取消中，请稍后再退出")

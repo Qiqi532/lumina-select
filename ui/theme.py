@@ -141,4 +141,29 @@ QPushButton#FacetChip:checked {{
     font-weight: 700;
 }}
 QPushButton#FacetChip:disabled {{ color: {color['border']}; }}
+/* ---- 【T-07】统一任务面板 ---- */
+QWidget#TaskPanel {{
+    background-color: {color['surface']};
+    border: 1px solid {color['border']};
+    border-radius: 8px;
+}}
+QFrame#TaskRow {{
+    background-color: {color['card']};
+    border-radius: 6px;
+}}
+QLabel#TaskRunning {{ color: {color['accent']}; font-weight: 700; }}
+QLabel#TaskOk {{ color: {color['success']}; font-weight: 700; }}
+QLabel#TaskFail {{ color: {color['danger']}; font-weight: 700; }}
+QLabel#TaskMuted {{ color: {color['muted']}; }}
+QPushButton#TaskCancel {{
+    background: transparent;
+    border: 1px solid {color['border']};
+    border-radius: 6px;
+    padding: 2px 8px;
+    min-height: 0;
+    color: {color['muted']};
+    font-size: 12px;
+}}
+QPushButton#TaskCancel:hover {{ border-color: {color['danger']}; color: {color['danger']}; }}
+QPushButton#TaskCancel:disabled {{ color: {color['border']}; border-color: {color['border']}; }}
 """

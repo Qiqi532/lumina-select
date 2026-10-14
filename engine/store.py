@@ -726,6 +726,65 @@ class PhotoStore:
     def count_photos(self, filters: dict | None = None) -> int:
         return len(self.query_photos(filters, order_by="path"))
 
+    # ------------------------------------------------------------------
+    # 【T-08】结构化查询原语：条件树由 services/query_builder.py 编译成
+    # (where_sql, args)，这里只负责"执行"。SQL 字符串的拼装仍集中在本文件与
+    # services/，UI 永远拿不到它（N6）。
+    # ------------------------------------------------------------------
+    def query_photos_where(
+        self,
+        where_sql: str = "",
+        args: tuple | list = (),
+        *,
+        order_by: str = "comp_score DESC",
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
+        """按给定的 WHERE 片段查询（片段与参数由 query_builder 产出）。"""
+        sql = "SELECT * FROM photos"
+        if where_sql:
+            sql += f" WHERE {where_sql}"
+        sql += f" ORDER BY {order_by}"
+        params: list = list(args)
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([int(limit), int(offset)])
+        return [self._row_to_dict(row) for row in self.conn.execute(sql, params).fetchall()]
+
+    def count_photos_where_query(self, where_sql: str = "", args: tuple | list = ()) -> int:
+        """按 WHERE 片段计数（与 `query_photos_where` 同一套编译结果）。"""
+        sql = "SELECT COUNT(*) FROM photos"
+        if where_sql:
+            sql += f" WHERE {where_sql}"
+        row = self.conn.execute(sql, list(args)).fetchone()
+        return int(row[0]) if row else 0
+
+    def distinct_values(
+        self,
+        column_expr: str,
+        *,
+        where_sql: str = "",
+        args: tuple | list = (),
+        limit: int = 200,
+    ) -> list[tuple]:
+        """取某列的去重值（含计数），供分面列出可选值。
+
+        ``column_expr`` 必须是**白名单列表达式**（由 query_builder 提供），
+        本方法不接受任意用户字符串 —— 否则就是注入入口。
+        返回 ``[(值, 计数), ...]``，按计数倒序（用户最关心的先出现）。
+        """
+        conditions = ["v IS NOT NULL"]
+        if where_sql:
+            conditions.append(f"({where_sql})")
+        sql = (
+            f"SELECT {column_expr} AS v, COUNT(*) AS n FROM photos "
+            f"WHERE {' AND '.join(conditions)} "
+            "GROUP BY v ORDER BY n DESC, v ASC LIMIT ?"
+        )
+        params = list(args) + [int(limit)]
+        return [(row["v"], int(row["n"])) for row in self.conn.execute(sql, params).fetchall()]
+
+
     def candidates(self, group_id: int) -> list[dict]:
         """某不确定组的候选照片（按 candidate_rank 排序）。"""
         return [self._row_to_dict(r) for r in self.conn.execute(

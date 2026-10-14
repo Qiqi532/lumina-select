@@ -73,3 +73,49 @@ QPushButton#CardForget {
 }
 QPushButton#CardForget:hover { border-color: #D46A6A; color: #D46A6A; }
 QScrollArea { background: transparent; }
+/* ---- 【T-08】分面筛选条 ---- */
+QWidget#FilterSidebar {
+    background-color: #181B1E;
+    border: 1px solid #303338;
+    border-radius: 8px;
+}
+QLabel#SidebarTitle { font-size: 15px; font-weight: 700; }
+QLabel#SectionTitle { color: #9299A1; font-size: 12px; font-weight: 600; }
+QLabel#ScopeLabel { color: #D7AA5A; font-size: 12px; }
+QFrame#Divider { color: #303338; max-height: 1px; }
+QPushButton#LinkButton {
+    background: transparent;
+    border: none;
+    padding: 2px 6px;
+    min-height: 0;
+    color: #9299A1;
+    font-size: 12px;
+}
+QPushButton#LinkButton:hover { color: #D7AA5A; }
+QPushButton#FacetHeader {
+    background: transparent;
+    border: none;
+    padding: 2px 0;
+    min-height: 0;
+    text-align: left;
+    color: #DFE2E6;
+    font-weight: 600;
+}
+QPushButton#FacetHeader:hover { color: #D7AA5A; }
+QPushButton#FacetChip {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 3px 8px;
+    min-height: 20px;
+    font-size: 12px;
+    text-align: left;
+}
+QPushButton#FacetChip:hover { border-color: #DFE2E6; }
+QPushButton#FacetChip:checked {
+    background-color: #D7AA5A;
+    border-color: #D7AA5A;
+    color: #111315;
+    font-weight: 700;
+}
+QPushButton#FacetChip:disabled { color: #303338; }

@@ -59,6 +59,8 @@ class ReviewService:
         self.star_filter = star_filter
         self.active_filter = ReviewFilter.ALL
         self.filter_star: int | None = None
+        # 【T-08】分面筛选下推的范围（照片路径集合）；None = 不限定。
+        self._scope_paths: set[str] | None = None
         self.items: dict[str, ReviewItem] = {}
         self.groups: dict[int, ReviewGroup] = {}
         self.photo_rows: dict[str, dict] = {}
@@ -191,7 +193,8 @@ class ReviewService:
         self.queue = [
             item
             for item in self.items.values()
-            if self._matches(item, self.active_filter, self.filter_star)
+            if self._in_scope(item)
+            and self._matches(item, self.active_filter, self.filter_star)
         ]
         ids = [item.asset_id for item in self.queue]
         self.cursor = (
@@ -206,6 +209,31 @@ class ReviewService:
         self.active_filter = ReviewFilter(name)
         self.filter_star = star
         self._rebuild_queue(previous_id, previous_index)
+
+    def set_photo_scope(self, paths: set[str] | None) -> None:
+        """限定审片范围到给定的照片路径集合（``None`` = 不限定）。
+
+        【T-08】分面筛选是在 SQL 层按 EXIF/评级收窄的，但审片队列是按
+        ``asset_id``（同组多张：RAW+JPEG 合并成一个 asset）组织的，两套键
+        对不上。这里收路径集合、按"asset 里有任一路径命中"来判定，避免把
+        一个 RAW+JPEG 组的半边筛掉导致预览错乱。
+
+        这样做是**只读过滤**：不改 DB、不动决策，纯内存队列收窄（N3/红线）。
+        """
+        self._scope_paths = None if paths is None else set(paths)
+        previous_id = self.current.asset_id if self.current else None
+        previous_index = self.cursor
+        self._rebuild_queue(previous_id, previous_index)
+
+    @property
+    def photo_scope(self) -> set[str] | None:
+        return getattr(self, "_scope_paths", None)
+
+    def _in_scope(self, item: ReviewItem) -> bool:
+        scope = getattr(self, "_scope_paths", None)
+        if scope is None:
+            return True
+        return any(path in scope for path in item.paths)
 
     def focus(self, asset_id: str) -> ReviewItem | None:
         for index, item in enumerate(self.queue):

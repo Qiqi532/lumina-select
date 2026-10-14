@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from engine.store import PhotoStore
 from services.review_service import ReviewFilter, ReviewService
 from ui.review.canvas import CanvasWidget
+from ui.review.facets import FacetModel
 from ui.review.filmstrip import FilmstripModel, FilmstripView
 from ui.review.filters import FilterSidebar
 from ui.review.inspector import InspectorWidget
@@ -32,6 +33,10 @@ class ReviewPage(QWidget):
     ) -> None:
         super().__init__(parent)
         self.review = ReviewService(store)
+        # 【T-08】分面模型与 ReviewService 共享同一个 store，但职责不同：
+        # ReviewService 管"审片队列/导航/撤销"，FacetModel 管"按 EXIF/评级收窄"。
+        # 两者都只读 DB，写由 services/commands.py 收口（N1）。
+        self.facets = FacetModel(store)
         self._updating = False
         self._stopped = False
         self._save_timer = QTimer(self)
@@ -44,9 +49,13 @@ class ReviewPage(QWidget):
         root.setSpacing(8)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.sidebar = FilterSidebar()
-        self.sidebar.setMinimumWidth(160)
-        self.sidebar.setMaximumWidth(200)
+        # 【T-08】分面条比旧 6 按钮宽 —— 相机/镜头型号本来就长。上限 280 是
+        # 为了别把取景区挤没；用户拖动 splitter 的宽度会被记住（见 save_splitter_sizes）。
+        self.sidebar.setMinimumWidth(180)
+        self.sidebar.setMaximumWidth(280)
         self.sidebar.filter_selected.connect(self._filter_selected)
+        self.sidebar.facet_toggled.connect(self._facet_toggled)
+        self.sidebar.facet_cleared.connect(self._facet_cleared)
         self.splitter.addWidget(self.sidebar)
 
         middle = QWidget()
@@ -111,6 +120,7 @@ class ReviewPage(QWidget):
 
     def reload(self) -> None:
         self.review.reload()
+        self.facets.rebuild()
         self.refresh()
 
     def refresh(self) -> None:
@@ -125,6 +135,11 @@ class ReviewPage(QWidget):
         finally:
             self._updating = False
         self.sidebar.set_counts(self.review.filter_counts())
+        # 【T-08】分面快照 + 作用域 + 筛后总数。计数由 FacetModel 算好，
+        # 筛选条只负责画（见 ui/review/filters.py 的模块 docstring）。
+        self.sidebar.set_facets(self.facets.facets_snapshot())
+        self.sidebar.set_scope_label(self.facets.scope_label())
+        self.sidebar.set_summary(self.facets.count(), has_filters=self.facets.has_filters)
         if current is None:
             self.canvas.set_items([], self.review.view_mode)
             self.inspector.set_item({}, [])
@@ -161,7 +176,44 @@ class ReviewPage(QWidget):
             self.refresh()
 
     def _filter_selected(self, selected: ReviewFilter) -> None:
+        """常用口径按钮：一键切到某个互斥口径，并清空分面。
+
+        【为什么点口径要清分面】口径与分面若同时生效，用户看到的是
+        "口径 ∩ 分面"，但按钮上只写着口径名 —— 那是会让人以为"照片丢了"
+        的隐式组合。宁可把分面清掉，让状态始终是"所见即所得"。
+        """
+        self.facets.clear_all()
         self.review.set_filter(selected)
+        self.refresh()
+
+    def _facet_toggled(self, key: str, raw_value: object) -> None:
+        """点某个分面值：在分面模型上翻转，并让审片队列跟上。
+
+        【为什么审片队列也要跟着变】分面若只影响计数不影响队列，用户点了
+        "5D4"却发现胶片条里还是全部照片 —— 筛选就是假的。这里把分面的
+        条件树编译成 SQL、查出照片路径集合，再让 ReviewService 只保留这些
+        照片（见 `_apply_facet_scope`）。
+        """
+        self.facets.toggle(key, raw_value)
+        self._apply_facet_scope()
+        self.refresh()
+
+    def _facet_cleared(self) -> None:
+        self.facets.clear_all()
+        self._apply_facet_scope()
+        self.refresh()
+
+    def _apply_facet_scope(self) -> None:
+        """把分面筛选结果下推给 ReviewService（只读查询，不写库）。"""
+        if not self.facets.has_filters:
+            self.review.set_photo_scope(None)
+            return
+        paths = {row["path"] for row in self.facets.query(order_by="path")}
+        self.review.set_photo_scope(paths)
+
+    def set_facet_scope(self, scope) -> None:
+        """外部（集合/人物入口）设定作用域，例如 ``{"kind": "collection", ...}``。"""
+        self.facets.set_scope(scope)
         self.refresh()
 
     def _next_group(self) -> None:

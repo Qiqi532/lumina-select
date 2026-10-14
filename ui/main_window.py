@@ -39,6 +39,7 @@ from engine import config
 from engine.catalog_registry import CatalogRegistry, read_photo_count
 from engine.log import get_logger
 from engine.store import PhotoStore
+from services.command_catalog import build_registry
 from .pages.analyze_page import AnalyzePage
 from .pages.export_page import ExportPage
 from .pages.import_page import ImportPage
@@ -86,6 +87,9 @@ class MainWindow(QMainWindow):
         # 并不代表"用户用过它" —— 是否值得登记只看照片数，见 register_current_project。
         self.store: PhotoStore = PhotoStore(self._initial_project)
         self.project_path: str = self.store.db_path
+        # 【T-06】命令注册表：UI 的写操作全部经它执行（N1）。
+        # 它是"未来 Agent 的唯一入口"在本期的形态 —— UI 与 Agent 走同一条路。
+        self.commands = build_registry(self.store)
         self.current_stage_name = "import"
         self._project_pages: dict[str, QWidget] = {}
 
@@ -321,6 +325,8 @@ class MainWindow(QMainWindow):
         old_store = self.store
         self.store = new_store
         self.project_path = new_store.db_path
+        # 命令表绑定的是 store，换项目必须重建 —— 否则命令会写进上一个项目库。
+        self.commands = build_registry(new_store)
         # 顺序要紧：先让旧页面退场（它们还持有旧 store），再关旧连接。
         # 反过来会在 shutdown 里对已关闭的库做操作，日志刷一堆无用的 WARNING。
         self._install_project_pages()
@@ -405,7 +411,11 @@ class MainWindow(QMainWindow):
         if not source_path.is_dir():
             self.show_error("请选择存在的照片目录")
             return
-        self.store.set_meta("source_dir", str(source_path))
+        # 经命令表写入（N1：UI 不直接写库），并留下事件供任务中心/未来 Agent 订阅。
+        result = self.commands.execute("photo.set_source_dir", {"source_dir": str(source_path)})
+        if not result.ok:
+            self.show_error(f"无法记录来源目录：{result.error.message if result.error else result}")
+            return
         self.goto("analyze")
         self.analyze_page.start(str(source_path), self.store.db_path)
 

@@ -178,6 +178,15 @@ class PhotoStore:
             (key, value))
         self.conn.commit()
 
+    def clear_meta(self, key: str) -> None:
+        """删除一个 meta 键（回到"从未设置"）。
+
+        与 `clear_preference` 同理：`set_meta` 只能写字符串，无法表达"原来是
+        None"。撤销"首次设置"时必须删行，否则会留下空串，与初始状态对不上。
+        """
+        with self.conn:
+            self.conn.execute("DELETE FROM meta WHERE key=?", (key,))
+
     def clear_all(self):
         """清空照片与分组（切换分析源时使用）。"""
         self.conn.execute("DELETE FROM photos")
@@ -580,6 +589,16 @@ class PhotoStore:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
             )
+
+    def clear_preference(self, key: str) -> None:
+        """删除一个偏好键（回到"从未设置"）。
+
+        撤销需要它：`set_preference` 只能写入字符串，无法表达"原来是 None"。
+        复原到"没设过这个键"必须删行，而不是写空串 —— 两者在 `get_preference`
+        的返回值上不同（None vs ""），会让撤销后的状态与原状对不上。
+        """
+        with self.conn:
+            self.conn.execute("DELETE FROM ui_preferences WHERE key=?", (key,))
 
     def record_export_item(
         self,

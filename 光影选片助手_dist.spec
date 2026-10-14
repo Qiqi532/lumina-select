@@ -37,6 +37,14 @@ for notice in ('NOTICE.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'release/exifto
     if not _os.path.isfile(notice):
         raise FileNotFoundError(notice)
     datas.append((notice, '.'))
+# LGPLv3 合规（T-02）：PySide6/shiboken6 是 LGPLv3 组件，发行包必须附带许可证全文。
+# 因 LGPLv3 以引用方式并入 GPLv3（LGPL-3.0 §3(b)/§4(b) 要求随目标码附 GNU GPL 副本），
+# 还需一并附带 GPL-3.0.txt。缺任一则构建即失败，避免漏带发行。
+# RELINKING.md 是 LGPLv3 §4(d)(0) 要求的「安装信息」，说明如何替换 Qt 库。
+for license_file in ('release/LGPL-3.0.txt', 'release/GPL-3.0.txt', 'release/RELINKING.md'):
+    if not _os.path.isfile(license_file):
+        raise FileNotFoundError(license_file)
+    datas.append((license_file, '.'))
 for runtime in ('exiftool.exe', 'exiftool_files'):
     source = _os.path.join('release', 'exiftool', runtime)
     if not _os.path.exists(source):

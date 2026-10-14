@@ -92,9 +92,16 @@ def test_smoke_payload_starts_analyzes_and_exports(tmp_path, monkeypatch):
 
 
 def test_bundle_audit_requires_torch_and_rejects_pyiqa(tmp_path):
-    """【v0.6 S2-1】只剩一套产物规则：torch/transformers 必须存在，pyiqa 绝不出现。"""
+    """【v0.6 S2-1】只剩一套产物规则：torch/transformers 必须存在，pyiqa 绝不出现。
+
+    【T-02】audit_bundle 现在同时审计 LGPLv3 物料，因此夹具需补齐
+    `_internal/` 下的 LGPL-3.0.txt / GPL-3.0.txt / RELINKING.md，
+    否则光靠 torch/transformers 无法清零。
+    """
     internal = tmp_path / "_internal"
     internal.mkdir()
+    for name in ("LGPL-3.0.txt", "GPL-3.0.txt", "RELINKING.md"):
+        (internal / name).write_text("text", encoding="utf-8")
     assert audit_bundle(tmp_path) == ["missing:torch", "missing:transformers"]
 
     (internal / "torch").mkdir()
@@ -103,3 +110,31 @@ def test_bundle_audit_requires_torch_and_rejects_pyiqa(tmp_path):
 
     (internal / "pyiqa").mkdir()
     assert audit_bundle(tmp_path) == ["pyiqa"]
+
+
+def test_bundle_audit_flags_missing_lgpl_materials(tmp_path):
+    """【T-02】缺任一 LGPL 物料（全文/替换说明）都必须被判失败。"""
+    internal = tmp_path / "_internal"
+    internal.mkdir()
+    (internal / "torch").mkdir()
+    (internal / "transformers").mkdir()
+
+    issues = audit_bundle(tmp_path)
+
+    assert issues == [
+        "missing_lgpl:LGPL-3.0.txt",
+        "missing_lgpl:GPL-3.0.txt",
+        "missing_lgpl:RELINKING.md",
+    ]
+
+
+def test_bundle_audit_accepts_lgpl_materials_in_release_root(tmp_path):
+    """【T-02】Inno Setup 安装后物料在根目录（非 `_internal`）也应通过。"""
+    internal = tmp_path / "_internal"
+    internal.mkdir()
+    (internal / "torch").mkdir()
+    (internal / "transformers").mkdir()
+    for name in ("LGPL-3.0.txt", "GPL-3.0.txt", "RELINKING.md"):
+        (tmp_path / name).write_text("text", encoding="utf-8")
+
+    assert audit_bundle(tmp_path) == []

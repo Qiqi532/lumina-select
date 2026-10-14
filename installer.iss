@@ -65,8 +65,15 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; 递归拷贝整个 onedir 文件夹（含 exe + 全部依赖）
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 许可与声明文件：从 _internal 提升到 {app} 根目录，确保用户安装后在程序目录
+; 直接可见（LGPLv3 §4 要求随二进制附许可证全文，不能只藏在 _internal 里）。
 Source: "{#MySourceDir}\_internal\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourceDir}\_internal\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+; LGPLv3 全文 + 其引用的 GPLv3 全文（T-02 合规物料）
+Source: "{#MySourceDir}\_internal\LGPL-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\_internal\GPL-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
+; LGPLv3 §4(d)(0) 要求提供替换 Qt 库的可行方式：随包附替换说明。
+Source: "{#MySourceDir}\_internal\RELINKING.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; 桌面快捷方式

@@ -21,11 +21,23 @@ def audit_bundle(bundle: Path) -> list[str]:
 
     【v0.6 S2-1】原实现接受 backend 参数、分标准/轻量两套规则。轻量版下线后
     只剩一套规则，参数一并去掉 —— 留着它就等于留着一个"可以审计轻量产物"的假接口。
+
+    【T-02】追加 LGPLv3 合规审计：onedir 形态 + 发行根目录含 LGPL/GPL 全文与
+    RELINKING.md。这些是 T-02 的验收项（发行产物含 LGPL 全文、形态为 onedir）。
     """
     internal = bundle / "_internal"
     names = {path.name.casefold() for path in internal.iterdir()} if internal.is_dir() else set()
     failures = ["pyiqa"] if "pyiqa" in names else []
     failures.extend(f"missing:{name}" for name in ("torch", "transformers") if name not in names)
+    # LGPLv3 合规物料：PyInstaller onedir 构建产物把它放进 `_internal/`
+    # （Inno Setup 安装后再提升到 {app} 根目录）。两处任一存在即算通过。
+    if not internal.is_dir():
+        failures.append("not_onedir:missing _internal")
+    for name in ("LGPL-3.0.txt", "GPL-3.0.txt", "RELINKING.md"):
+        if not (
+            (bundle / name).is_file() or (internal / name).is_file()
+        ):
+            failures.append(f"missing_lgpl:{name}")
     return failures
 
 

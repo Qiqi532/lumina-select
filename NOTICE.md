@@ -14,8 +14,27 @@ Qt 组件、ExifTool 和模型权重仍受各自条款约束；自动检查是�
   `requirements.txt` 一份锁定清单供本文件的清单生成使用。
 - **PySide6、PySide6-Essentials 与 shiboken6 属于人工复核包**。三者均为 Qt 官方的
   **LGPLv3** 组件，不再有 PyQt6 的 GPLv3 传染问题，因此本项目自有代码得以保留
-  Apache-2.0。发行时必须满足 LGPL 义务：随包附 LGPLv3 全文、在 `THIRD_PARTY_NOTICES.md`
-  声明、并**保持 onedir 形态**以保证 Qt 库可替换（禁止 onefile）。
+  Apache-2.0。发行时必须满足以下 LGPLv3 义务：
+
+  | 义务 | 落地方式 |
+  | --- | --- |
+  | 随发行包附 **LGPLv3 全文** | 发行目录内附 `LGPL-3.0.txt`（构建时由 spec 强制打入，缺文件即构建失败） |
+  | 随包附 LGPLv3 所引用的 **GPLv3 全文** | 发行目录内附 `GPL-3.0.txt`（LGPL-3.0 §3(b)/§4(b) 要求随目标码附 GNU GPL 副本） |
+  | 声明哪些部分是 LGPL 组件 | `THIRD_PARTY_NOTICES.md` 中的 PySide6 / Shiboken6 条目 |
+  | 提供 LGPL 组件源码获取途径（**书面报价**） | 见下方「LGPL 组件源码获取」；同目录 `RELINKING.md` 给出替换步骤 |
+  | **保证可替换性** | 坚持 **onedir** 形态，禁止 onefile；不修改 Qt 库本身；`RELINKING.md` 说明替换方法 |
+  | 许可证自动化校验 | `scripts/check_release_licenses.py` 的 `--release --bundle-dir` 门禁 |
+
+- **LGPL 组件源码获取（书面报价 / written offer）**：本发行包使用
+  `PySide6 == 6.8.1`、`PySide6-Essentials == 6.8.1`、`shiboken6 == 6.8.1` 与
+  `Qt 6.8.1`。对应源码可从下列官方渠道获取：
+  - PySide6 / shiboken6：PyPI 源码发行 <https://pypi.org/project/PySide6/#files>；
+    官方仓库 <https://code.qt.io/cgit/pyside/pyside-setup.git/>
+  - Qt 6.8.1：<https://download.qt.io/official_releases/qt/6.8/6.8.1/single/>
+    （`qt-everywhere-src-6.8.1.tar.xz`）
+
+  用户亦可用自行修改/编译的兼容版本**就地替换**发行目录中的 Qt 库，步骤见同目录
+  `RELINKING.md`。此为 LGPLv3 §4(d)(0) 要求的安装信息。
 - 精确 Python 包版本和安装元数据由 `scripts/check_release_licenses.py` 生成到
   `THIRD_PARTY_NOTICES.md`。正式发布还必须通过该脚本的 `--release` 门禁。
   v0.6 收口时的开发检查结果：**67 packages 通过，`pyiqa` 缺席**，清单重新生成后与

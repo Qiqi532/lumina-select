@@ -532,6 +532,80 @@ class PhotoStore:
                 ],
             )
 
+    def apply_decisions_batch(
+        self,
+        patches: list[tuple[str, int, str | None]],
+        *,
+        source: str,
+    ) -> list[dict]:
+        """批量写入决策，**单事务**，返回写入前的行（供整体撤销）。
+
+        与"循环调用 :meth:`apply_decision`" 的区别不只是少几次 commit ——
+        批量必须**原子**。若 500 张写到第 300 张时失败，逐条写会留下
+        "一半改了一半没改"的库，但用户看到的却是一次操作，那是最难解释的
+        一类数据损坏。单事务下要么全成、要么全部回滚。
+
+        与 :meth:`apply_decision` 一样会**连带配对成员**（RAW+JPEG 同属一个
+        asset）：未显式给出的成员跟随其 asset 内第一张显式给出的照片。
+        """
+        if not patches:
+            return []
+        requested: dict[str, tuple[int, str | None]] = {
+            str(path): (int(star), label) for path, star, label in patches
+        }
+        placeholders = ",".join("?" for _ in requested)
+        rows = self.conn.execute(
+            f"SELECT path, asset_pair_id FROM photos WHERE path IN ({placeholders})",
+            list(requested),
+        ).fetchall()
+        if not rows:
+            return []
+
+        pair_of = {row["path"]: row["asset_pair_id"] for row in rows}
+        owners_by_pair: dict[str, str] = {}
+        for path, pair_id in pair_of.items():
+            if pair_id and pair_id not in owners_by_pair:
+                owners_by_pair[pair_id] = path
+
+        effective: dict[str, tuple[int, str | None]] = dict(requested)
+        pair_ids = sorted(owners_by_pair)
+        if pair_ids:
+            pair_placeholders = ",".join("?" for _ in pair_ids)
+            members = self.conn.execute(
+                "SELECT path, asset_pair_id FROM photos "
+                f"WHERE asset_pair_id IN ({pair_placeholders})",
+                pair_ids,
+            ).fetchall()
+            for member in members:
+                path = member["path"]
+                if path in effective:
+                    continue
+                owner = owners_by_pair.get(member["asset_pair_id"])
+                if owner is not None:
+                    effective[path] = requested[owner]
+
+        paths = sorted(effective)
+        batch_placeholders = ",".join("?" for _ in paths)
+        before = [
+            self._row_to_dict(row)
+            for row in self.conn.execute(
+                "SELECT path, star, label, decision_source, decision_updated_at "
+                f"FROM photos WHERE path IN ({batch_placeholders}) ORDER BY path",
+                paths,
+            ).fetchall()
+        ]
+        updated_at = time.time()
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE photos SET star=?, label=?, decision_source=?, "
+                "decision_updated_at=? WHERE path=?",
+                [
+                    (star, label, source, updated_at, path)
+                    for path, (star, label) in sorted(effective.items())
+                ],
+            )
+        return before
+
     def review_snapshot(self) -> dict[str, list[dict]]:
         """Read all review data in three bulk queries, never once per photo."""
         return {

@@ -31,6 +31,7 @@ from engine.store import PhotoStore
 
 from .commands import CommandRegistry, CommandSpec
 from .contracts import EventName, RiskLevel
+from .quarantine import QuarantineResult, quarantine_files, restore_quarantine
 
 # 人工决策的合法来源标记（与既有 store 约定一致）。
 _DECISION_SOURCE = "manual"
@@ -42,6 +43,36 @@ _DECISION_SOURCE = "manual"
 _PATH_PARAM = {"type": "string", "description": "照片绝对路径"}
 _PATHS_PARAM = {"type": "array", "description": "照片绝对路径列表", "items": {"type": "string"}}
 _STAR_PARAM = {"type": "integer", "minimum": 0, "maximum": 5, "description": "星级 0–5"}
+
+
+def _json_dumps(payload: Mapping[str, Any]) -> str:
+    """把隔离结果序列化进偏好（偏好列只存字符串）。"""
+    import json
+
+    return json.dumps(dict(payload), ensure_ascii=False)
+
+
+def last_quarantine(store: PhotoStore) -> QuarantineResult | None:
+    """读出上一次隔离的结果（供 UI 提示"上次隔离了 N 张，在 <目录>"）。
+
+    读不出来（未做过 / 内容损坏）一律返回 ``None`` —— 这只是提示信息，
+    不该让调用方为此崩掉。
+    """
+    import json
+
+    raw = store.get_preference("cleanup.last_quarantine")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return QuarantineResult.from_dict(payload)
+    except (TypeError, ValueError, IndexError):
+        return None
 
 
 def _decision_revert(
@@ -249,10 +280,7 @@ def register_core_commands(registry: CommandRegistry, store: PhotoStore) -> None
         paths = [str(path) for path in params["paths"]]
         star_param = params.get("star")
         flag = params.get("flag")
-        before: list[tuple[str, int, str | None]] = []
-        for path in paths:
-            row = store.get_photo(path) or {}
-            before.append((path, int(row.get("star") or 0), row.get("label")))
+        patches: list[tuple[str, int, str | None]] = []
         for path in paths:
             current = store.get_photo(path) or {}
             star = int(star_param) if star_param is not None else int(current.get("star") or 0)
@@ -263,10 +291,19 @@ def register_core_commands(registry: CommandRegistry, store: PhotoStore) -> None
                 star, label = 0, "X"
             elif flag == "U":
                 label = None
-            store.apply_decision([path], star=star, label=label, source=_DECISION_SOURCE)
+            patches.append((path, star, label))
+        # 【T-10】单事务。500 张一次操作必须"全成或全回滚"，不能留下改了一半的库；
+        # 逐条 apply_decision 是 N 个事务，中途失败就是最难解释的那类数据损坏。
+        before = store.apply_decisions_batch(patches, source=_DECISION_SOURCE)
+
+        def revert() -> None:
+            # 用 restore_decisions 精确回填（含 decision_source/decision_updated_at），
+            # 而不是逐条反写 —— 撤销本身也必须是单事务。
+            store.restore_decisions(before)
+
         return (
-            {"count": len(paths), "event_payload": {"count": len(paths)}},
-            _decision_revert(store, before),
+            {"count": len(before), "event_payload": {"count": len(before)}},
+            revert,
         )
 
     # ==================================================================
@@ -414,27 +451,59 @@ def register_core_commands(registry: CommandRegistry, store: PhotoStore) -> None
             "required": ["paths"],
             "properties": {
                 "paths": _PATHS_PARAM,
-                "quarantine_dir": {"type": "string", "description": "隔离目录（可选）"},
+                "project_dir": {
+                    "type": "string",
+                    "description": "项目根目录；隔离目录建在其下（缺省取库内 source_dir）",
+                },
+                "stamp": {"type": "string", "description": "隔离目录日期戳，默认当天 YYYYMMDD"},
+                "reason": {"type": "string", "description": "写入清单的原因说明"},
             },
         },
         events=(EventName.CLEANUP_REJECTED,),
-        returns="{'count': int, 'quarantined': int}",
+        returns="{'count': int, 'quarantined': int, 'root': str, 'missing': int, 'failed': int}",
     )
     def _cleanup_rejected(params: Mapping[str, Any]) -> Any:
         paths = [str(path) for path in params["paths"]]
-        # N3：一律软删除。本期先记录"被隔离的清单"到偏好，真实搬移由后续任务实现；
-        # 关键是把**契约与语义**冻结为"隔离而非删除"，避免未来有人接成 rm。
+        project_dir = str(params.get("project_dir") or store.get_meta("source_dir") or "")
+        if not project_dir:
+            raise ValueError(
+                "缺少 project_dir：无法确定隔离目录位置（库内也没有 source_dir 元数据）"
+            )
+        # 【T-10】真实隔离搬移。N3：只 move，绝不 remove —— 隔离目录里还有一份
+        # manifest.json，即使应用数据丢了用户也能手工找回。
+        result = quarantine_files(
+            paths,
+            project_dir,
+            stamp=params.get("stamp"),
+            reason=str(params.get("reason") or "cleanup.rejected"),
+        )
+
+        # 把清单落进偏好，让"上一次隔离了什么"跨会话可查（撤销栈在内存里，
+        # 进程一关就没了，这里留一条可读的兜底线索）。
         key = "cleanup.last_quarantine"
         previous = store.get_preference(key)
-        store.set_preference(key, "\n".join(paths))
+        store.set_preference(key, _json_dumps(result.to_dict()))
 
         def revert() -> None:
+            # 撤销 = 把文件搬回原处。这才让"绝不真删"成为可执行的承诺，
+            # 而不是一句注释。原位置若已被同名文件占用则不覆盖（留给用户处理）。
+            restore_quarantine(result)
             if previous is None:
                 store.clear_preference(key)
             else:
                 store.set_preference(key, previous)
 
-        return ({"count": len(paths), "quarantined": 0}, revert)
+        return (
+            {
+                "count": len(paths),
+                "quarantined": result.moved_count,
+                "root": result.root,
+                "missing": len(result.missing),
+                "failed": len(result.failed),
+                "event_payload": {"count": result.moved_count},
+            },
+            revert,
+        )
 
 
 __all__ = ["register_core_commands"]

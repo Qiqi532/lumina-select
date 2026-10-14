@@ -51,6 +51,18 @@ class DecisionSnapshot:
     before: tuple[dict, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class BatchSnapshot:
+    """【T-10】一次批量操作的撤销点。
+
+    与 ``DecisionSnapshot`` 的区别只是"影响多个 asset"——撤销时无法也不必
+    聚焦到某一张，回到批量前的状态即可。
+    """
+
+    asset_ids: tuple[str, ...]
+    before: tuple[dict, ...]
+
+
 class ReviewService:
     MAX_UNDO = 200
 
@@ -59,6 +71,15 @@ class ReviewService:
         self.star_filter = star_filter
         self.active_filter = ReviewFilter.ALL
         self.filter_star: int | None = None
+        # 【T-11】工具状态记忆：口径与星级阈值跨重启保留。
+        # 只认**合法值** —— 旧版本存过的值若已不在枚举里就当没存过，
+        # 否则会把库升级后的第一次启动直接卡在一个不存在的口径上。
+        saved_filter = store.get_preference("review.filter")
+        if saved_filter in ReviewFilter._value2member_map_:
+            self.active_filter = ReviewFilter(saved_filter)
+        saved_threshold = store.get_preference("review.star_threshold")
+        if saved_threshold is not None and saved_threshold.isdigit():
+            self.star_filter = int(saved_threshold)
         # 【T-08】分面筛选下推的范围（照片路径集合）；None = 不限定。
         self._scope_paths: set[str] | None = None
         self.items: dict[str, ReviewItem] = {}
@@ -67,7 +88,11 @@ class ReviewService:
         self.face_rows: dict[str, list[dict]] = {}
         self.queue: list[ReviewItem] = []
         self.cursor = 0
-        self._undo_stack: list[DecisionSnapshot] = []
+        # 【T-10】多选是"选中了哪些 asset"（不是路径）—— 一个 asset 可能含
+        # RAW+JPEG 两张，用户点一下缩略图就应该整组一起动。
+        self.selection: list[str] = []
+        self._anchor: str | None = None
+        self._undo_stack: list[DecisionSnapshot | BatchSnapshot] = []
         saved_mode = store.get_preference("review.view_mode")
         self._preferred_mode = ViewMode(saved_mode) if saved_mode in ViewMode._value2member_map_ else None
         self.reload()
@@ -208,7 +233,14 @@ class ReviewService:
         previous_index = self.cursor
         self.active_filter = ReviewFilter(name)
         self.filter_star = star
+        # 【T-11】记住口径：下次打开回到上次那个视图（"每次重开重设"是隐形流失）。
+        self.store.set_preference("review.filter", self.active_filter.value)
         self._rebuild_queue(previous_id, previous_index)
+
+    def set_star_threshold(self, threshold: int) -> None:
+        """设置并记住星级阈值（跨重启保留）。"""
+        self.star_filter = int(threshold)
+        self.store.set_preference("review.star_threshold", str(self.star_filter))
 
     def set_photo_scope(self, paths: set[str] | None) -> None:
         """限定审片范围到给定的照片路径集合（``None`` = 不限定）。
@@ -262,6 +294,131 @@ class ReviewService:
             return None
         return self.focus(candidates[position])
 
+    # ------------------------------------------------------------------
+    # 【T-10】多选与批量操作
+    # ------------------------------------------------------------------
+    def select_only(self, asset_id: str) -> None:
+        """无修饰键点击：只选这一张，并把它设为区间锚点。"""
+        self.selection = [asset_id] if asset_id in self.items else []
+        self._anchor = asset_id
+
+    def select_toggle(self, asset_id: str) -> None:
+        """Ctrl/Cmd + 点击：翻转这一张的选中态（多选的基本操作）。"""
+        if asset_id not in self.items:
+            return
+        if asset_id in self.selection:
+            self.selection.remove(asset_id)
+        else:
+            self.selection.append(asset_id)
+        self._anchor = asset_id
+
+    def select_range(self, asset_id: str) -> None:
+        """Shift + 点击：从锚点连选到这一张，**按当前队列顺序**。
+
+        按队列顺序而不是按 items 的字典序 —— 用户看到的是胶片带的顺序，
+        连选必须和他眼睛看到的区间一致。
+        """
+        if asset_id not in self.items:
+            return
+        order = [item.asset_id for item in self.queue]
+        anchor = self._anchor if self._anchor in order else None
+        if anchor is None or asset_id not in order:
+            self.selection = [asset_id]
+        else:
+            start, end = order.index(anchor), order.index(asset_id)
+            if start > end:
+                start, end = end, start
+            self.selection = order[start : end + 1]
+        self._anchor = asset_id
+
+    def select_all(self) -> None:
+        """全选**当前队列**（不是全库）—— 用户看到多少就是多少。"""
+        self.selection = [item.asset_id for item in self.queue]
+
+    def set_selection(self, asset_ids) -> None:
+        """由 UI（Qt 选择模型）整体同步选中集合。
+
+        只保留**当前仍存在**的 asset —— 筛选变化后旧 id 可能已不在队列里，
+        留着会让"已选 N 张"虚高，并让批量操作作用在看不见的照片上。
+        """
+        seen: list[str] = []
+        for asset_id in asset_ids:
+            if asset_id in self.items and asset_id not in seen:
+                seen.append(asset_id)
+        self.selection = seen
+        self._anchor = seen[-1] if seen else None
+
+    def clear_selection(self) -> None:
+        self.selection = []
+        self._anchor = None
+
+    def selected_items(self) -> list[ReviewItem]:
+        known = self.items
+        return [known[asset_id] for asset_id in self.selection if asset_id in known]
+
+    def selected_paths(self) -> list[str]:
+        """选中 asset 展开成的照片路径（RAW+JPEG 会成对展开）。"""
+        paths: list[str] = []
+        for item in self.selected_items():
+            paths.extend(item.paths)
+        return paths
+
+    def _is_manually_rejected(self, item: ReviewItem) -> bool:
+        for path in item.paths:
+            row = self.photo_rows.get(path) or {}
+            if row.get("label") == "X":
+                return True
+        return False
+
+    def rejected_items(self) -> list[ReviewItem]:
+        """已排除项 —— **只算人工判废**（``label == "X"``）。
+
+        为什么不含 AI 判废（``is_waste``）：那里面有用户**根本没看过的照片**。
+        把它们一起搬进隔离目录，等于把没审过的片子当垃圾处理 —— 这正是选片工具
+        最不该做的事。要清理 AI 废片，得先过一遍人工复核。
+        """
+        return [item for item in self.items.values() if self._is_manually_rejected(item)]
+
+    def rejected_paths(self) -> list[str]:
+        paths: list[str] = []
+        for item in self.rejected_items():
+            paths.extend(item.paths)
+        return paths
+
+    def apply_batch(self, *, star: int | None = None, flag: str | None = None) -> int:
+        """对选中 asset 批量写决策：**单事务**，整体一个撤销点。
+
+        返回实际写入的照片行数。500 张一次操作要么全成要么全回滚，撤销也是
+        一次还原 —— 用户按一次 Ctrl+Z 就能回到批量前。
+        """
+        items = self.selected_items()
+        if not items:
+            return 0
+        patches: list[tuple[str, int, str | None]] = []
+        for item in items:
+            for path in item.paths:
+                row = self.photo_rows.get(path) or {}
+                current_star = int(row.get("star") or 0)
+                label = row.get("label")
+                target_star = int(star) if star is not None else current_star
+                if flag == "P":
+                    target_star, label = 5, "P"
+                elif flag == "X":
+                    target_star, label = 0, "X"
+                elif flag == "U":
+                    label = None
+                patches.append((path, target_star, label))
+        if not patches:
+            return 0
+        before = self.store.apply_decisions_batch(patches, source="manual")
+        self._undo_stack.append(
+            BatchSnapshot(tuple(item.asset_id for item in items), tuple(before))
+        )
+        if len(self._undo_stack) > self.MAX_UNDO:
+            self._undo_stack.pop(0)
+        self.reload()
+        return len(before)
+
     def _apply(self, *, star: int, label: str | None) -> None:
         item = self.current
         if item is None:
@@ -312,5 +469,10 @@ class ReviewService:
         snapshot = self._undo_stack.pop()
         self.store.restore_decisions(snapshot.before)
         self.reload()
-        self.focus(snapshot.asset_id)
+        # 单张撤销回到那一张（用户要看见自己撤了什么）；批量撤销不聚焦 ——
+        # 聚焦到其中任意一张都会让人误以为只有它变了。
+        if isinstance(snapshot, DecisionSnapshot):
+            self.focus(snapshot.asset_id)
+        elif snapshot.asset_ids:
+            self.focus(snapshot.asset_ids[0])
         return True

@@ -221,8 +221,13 @@ class CommandRegistry:
             token = self._push_undo(spec, payload, value)
 
         emitted = self._emit(spec, payload, value)
+        # 【T-10】对外只暴露真正的 value，不暴露 ``(value, revert)`` 元组。
+        # 原因有二：① 调用方（尤其未来的 Agent 桥）不该看到也用不上 revert 闭包；
+        # ② ``CommandResult.to_dict()`` 要能被序列化，而元组里那个 lambda **根本
+        # 没法进 JSON** —— 留着就是给未来埋一个必炸的雷。
+        public_value = value[0] if isinstance(value, tuple) and len(value) == 2 else value
         return CommandResult(
-            name=name, ok=True, value=value, undo_token=token, events=emitted,
+            name=name, ok=True, value=public_value, undo_token=token, events=emitted,
         )
 
     def _push_undo(self, spec: CommandSpec, payload: Mapping[str, Any], value: Any) -> str:

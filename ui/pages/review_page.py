@@ -1,11 +1,19 @@
 """Five-zone keyboard-first review workspace wired exclusively to services."""
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import (
+    QItemSelection,
+    QItemSelectionModel,
+    QTimer,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -14,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from engine.store import PhotoStore
 from services.review_service import ReviewFilter, ReviewService
+from ui.review.batch_bar import BatchBar
 from ui.review.canvas import CanvasWidget
 from ui.review.facets import FacetModel
 from ui.review.filmstrip import FilmstripModel, FilmstripView
@@ -23,15 +32,27 @@ from ui.review.shortcuts import install_review_shortcuts
 
 
 class ReviewPage(QWidget):
+    # 【T-11】复核页自身完成不了的两个动作交给 Shell：
+    # navigate_requested —— 跨页跳转（如 Ctrl+E 去导出页）；
+    # notice_requested   —— 状态栏提示（含"该功能尚未启用"的原因说明）。
+    navigate_requested = Signal(str)
+    notice_requested = Signal(str)
+
     def __init__(
         self,
         store: PhotoStore,
         *,
         image_loader=None,
         thumbnail_loader=None,
+        commands=None,
+        bindings=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
+        # 【T-10】命令表：批量与清理都必须走它，UI 不直接写库（N1）。
+        self.commands = commands
+        # 【T-11】快捷键绑定（``{命令: 按键}``）。None = 沿用 v0.6 的既有键位。
+        self.bindings = bindings
         self.review = ReviewService(store)
         # 【T-08】分面模型与 ReviewService 共享同一个 store，但职责不同：
         # ReviewService 管"审片队列/导航/撤销"，FacetModel 管"按 EXIF/评级收窄"。
@@ -74,8 +95,21 @@ class ReviewPage(QWidget):
         )
         self.filmstrip = FilmstripView(self.filmstrip_model)
         self.filmstrip.setFixedHeight(126)
+        # 【T-10】交给 Qt 自己的 ExtendedSelection：Ctrl/Shift 连选与高亮是
+        # 免费且行为标准的，自己实现一套只会和用户的系统习惯对不上。
+        self.filmstrip.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.filmstrip.selectionModel().currentChanged.connect(self._filmstrip_selected)
+        self.filmstrip.selectionModel().selectionChanged.connect(self._filmstrip_selection_changed)
         middle_layout.addWidget(self.filmstrip)
+
+        self.batch_bar = BatchBar()
+        self.batch_bar.star_requested.connect(self._batch_star)
+        self.batch_bar.flag_requested.connect(self._batch_flag)
+        self.batch_bar.select_all_requested.connect(self._batch_select_all)
+        self.batch_bar.clear_requested.connect(self._batch_clear)
+        self.batch_bar.cleanup_requested.connect(self._cleanup_rejected)
+        middle_layout.addWidget(self.batch_bar)
+
         footer = QHBoxLayout()
         self.progress_label = QLabel("0 / 0")
         # 【v0.6 S3-4 / P1-8】提示要把「星级与 P/X 的联动规则」说清楚，否则用户
@@ -101,9 +135,21 @@ class ReviewPage(QWidget):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.splitterMoved.connect(lambda _position, _index: self._save_timer.start())
         root.addWidget(self.splitter, 1)
-        self.actions = install_review_shortcuts(self, self._command)
+        self.actions = install_review_shortcuts(self, self._command, bindings=self.bindings)
         self._restore_splitter_sizes()
         self.refresh()
+
+    def install_shortcuts(self, bindings) -> None:
+        """【T-11】换一套键位：先拆掉旧的，再装新的。
+
+        不重建页面 —— 那会丢掉滚动位置、选中与撤销栈上下文；QAction 本来
+        就是可以随时增删的。
+        """
+        for action in self.actions.values():
+            self.removeAction(action)
+            action.deleteLater()
+        self.bindings = dict(bindings) if bindings else None
+        self.actions = install_review_shortcuts(self, self._command, bindings=self.bindings)
 
     def _restore_splitter_sizes(self) -> None:
         left = int(self.review.store.get_preference("review.left_width") or 180)
@@ -134,6 +180,9 @@ class ReviewPage(QWidget):
                 self.filmstrip.setCurrentIndex(self.filmstrip_model.index(self.review.cursor))
         finally:
             self._updating = False
+        # 【T-10】队列重建后把选中态画回胶片带，并刷新批量条计数。
+        self._sync_filmstrip_selection()
+        self._update_batch_bar()
         self.sidebar.set_counts(self.review.filter_counts())
         # 【T-08】分面快照 + 作用域 + 筛后总数。计数由 FacetModel 算好，
         # 筛选条只负责画（见 ui/review/filters.py 的模块 docstring）。
@@ -174,6 +223,103 @@ class ReviewPage(QWidget):
         asset_id = index.data(FilmstripModel.AssetIdRole)
         if self.review.focus(asset_id) is not None:
             self.refresh()
+
+    def _filmstrip_selection_changed(self, _selected, _deselected) -> None:
+        """Qt 选择模型 → ReviewService（选中集合的唯一真相仍在 service 里）。"""
+        if self._updating:
+            return
+        model = self.filmstrip.model()
+        asset_ids = [
+            model.data(index, FilmstripModel.AssetIdRole)
+            for index in self.filmstrip.selectionModel().selectedIndexes()
+        ]
+        self.review.set_selection([asset_id for asset_id in asset_ids if asset_id])
+        self._update_batch_bar()
+
+    def _sync_filmstrip_selection(self) -> None:
+        """ReviewService → Qt 选择模型（队列重建后把选中态画回去）。"""
+        model = self.filmstrip.model()
+        selection_model = self.filmstrip.selectionModel()
+        if model is None or selection_model is None:
+            return
+        merged = QItemSelection()
+        for row, item in enumerate(self.review.queue):
+            if item.asset_id in self.review.selection:
+                index = model.index(row, 0)
+                merged.select(index, index)
+        self._updating = True
+        try:
+            selection_model.select(
+                merged, QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
+        finally:
+            self._updating = False
+
+    def _update_batch_bar(self) -> None:
+        self.batch_bar.set_selection_count(len(self.review.selection))
+        self.batch_bar.set_total_count(len(self.review.queue))
+        self.batch_bar.set_rejected_count(len(self.review.rejected_items()))
+
+    def _batch_star(self, star: int) -> None:
+        self.review.apply_batch(star=int(star))
+        self.reload()
+
+    def _batch_flag(self, flag: str) -> None:
+        self.review.apply_batch(flag=str(flag))
+        self.reload()
+
+    def _batch_select_all(self) -> None:
+        self.review.select_all()
+        self._sync_filmstrip_selection()
+        self._update_batch_bar()
+
+    def _batch_clear(self) -> None:
+        self.review.clear_selection()
+        self._sync_filmstrip_selection()
+        self._update_batch_bar()
+
+    def _cleanup_rejected(self) -> None:
+        """清理已排除项：移进项目内隔离目录（N3，绝不真删）。"""
+        paths = self.review.rejected_paths()
+        if not paths:
+            return
+        project_dir = self.review.store.get_meta("source_dir") or ""
+        if not project_dir:
+            QMessageBox.warning(
+                self,
+                "无法清理",
+                "当前项目没有记录来源目录，无法确定隔离目录的位置。",
+            )
+            return
+        if self.commands is None:
+            QMessageBox.warning(self, "无法清理", "命令表未装配，清理命令不可用。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "清理已排除项",
+            f"将把 {len(paths)} 张人工判废的照片移进隔离目录：\n"
+            f"{project_dir}\\.trash_<今天日期>\n\n"
+            "这是**搬移**不是删除 —— 可以随时搬回原处。\n"
+            "AI 判废但你看都没看过的照片不会被搬走。\n\n确定继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        result = self.commands.execute("cleanup.rejected", {"paths": paths, "project_dir": project_dir})
+        if not result.ok:
+            QMessageBox.warning(self, "清理未执行", str(result.error))
+            return
+        value = result.value if isinstance(result.value, dict) else {}
+        QMessageBox.information(
+            self,
+            "清理完成",
+            f"已隔离 {value.get('quarantined', 0)} 张"
+            + (f"，{value.get('missing', 0)} 张原文件已不在" if value.get("missing") else "")
+            + (f"，{value.get('failed', 0)} 张失败" if value.get("failed") else "")
+            + f"\n隔离目录：{value.get('root', '')}",
+        )
+        self.reload()
 
     def _filter_selected(self, selected: ReviewFilter) -> None:
         """常用口径按钮：一键切到某个互斥口径，并清空分面。
@@ -257,7 +403,32 @@ class ReviewPage(QWidget):
             self.inspector.setVisible(self.inspector.isHidden())
         elif command == "undo":
             self.review.undo()
+        # ---- 【T-11】新增键位 ----
+        elif command == "confirm-best":
+            self._next_group()
+        elif command == "zoom-preview":
+            self.canvas.set_zoom(1.0 if self.canvas.zoom_percent() > 100 else 2.0)
+        elif command == "export":
+            self.navigate_requested.emit("export")
+            return
+        else:
+            self._command_pending(command)
+            return
         self.refresh()
+
+    def _command_pending(self, command: str) -> None:
+        """尚未启用的键位 —— **必须说清原因，绝不静默 no-op**。
+
+        静默什么都不做比报错更坏：用户会以为是自己按错了，反复重试。
+        """
+        reasons = {
+            "search": "搜索（Ctrl+F）将在 T-12 规模优化后随虚拟滚动一起上线",
+            "command-palette": "命令面板（Ctrl+K）是未来 Agent 入口，本期只做架构接缝（T-06），功能未开放",
+            "save-collection": "存为集合（Ctrl+B）依赖智能集合，见 T-09",
+            "goto-face-group": "跳到人脸组（Ctrl+Shift+N）依赖人物线，见 T-15",
+            "assign-person": "归属人物（T）依赖人物线，见 T-15",
+        }
+        self.notice_requested.emit(reasons.get(command, f"命令 {command} 尚未接线"))
 
     def shutdown(self) -> None:
         if self._stopped:

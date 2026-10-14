@@ -98,6 +98,10 @@ def test_every_mutating_command_declares_undoable(registry):
         assert spec.undoable is True, f"{spec.name} 声称会改数据却没有 undo"
 
 
+# 需要"真实上下文"才能执行的命令：合成参数给不出，只能接受它**说清原因地失败**。
+_NEEDS_REAL_CONTEXT = {"cleanup.rejected"}
+
+
 def test_every_mutating_command_actually_undoes(registry, store):
     """真跑一遍：执行 → 状态确实变了 → undo → 状态回到执行前。
 
@@ -111,11 +115,19 @@ def test_every_mutating_command_actually_undoes(registry, store):
         snapshot_before = _store_fingerprint(store)
         result = registry.execute(spec.name, _params_for(spec))
         if not result.ok:
-            # 人物命令属"未接线"（NotImplementedError），其可撤销性在 T-15 验收。
             assert result.error is not None and result.error.code in {
                 "handler_failed", "unknown_command",
             }, f"{spec.name} 意外失败：{result.error}"
-            assert "T-15" in (result.error.message or ""), \
+            message = result.error.message or ""
+            if spec.name in _NEEDS_REAL_CONTEXT:
+                # 【T-10】cleanup.rejected 需要"照片所在的项目目录"才能决定隔离目录
+                # 放哪 —— 这是合成参数给不出的真实上下文。它必须**说清楚为什么失败**，
+                # 绝不能静默 no-op；可撤销性由 test_batch_cleanup.py 单独验收。
+                assert "project_dir" in message, \
+                    f"{spec.name} 失败必须说明缺什么，实际：{message}"
+                continue
+            # 人物命令属"未接线"（NotImplementedError），其可撤销性在 T-15 验收。
+            assert "T-15" in message, \
                 f"{spec.name} 的失败原因应当说明是人物线未启用"
             continue
         assert result.undo_token is not None, f"{spec.name} 成功却没有 undo_token"

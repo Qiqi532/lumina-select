@@ -144,3 +144,58 @@ QPushButton#TaskCancel {
 }
 QPushButton#TaskCancel:hover { border-color: #D46A6A; color: #D46A6A; }
 QPushButton#TaskCancel:disabled { color: #303338; border-color: #303338; }
+
+/* ---- 【T-10】批量操作条 ---- */
+QWidget#BatchBar {
+    background-color: #16191C;
+    border: 1px solid #303338;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+QLabel#BatchCount { color: #E6E8EA; font-weight: 700; font-size: 12px; }
+QLabel#BatchMuted { color: #9299A1; font-size: 12px; }
+QPushButton#BatchLink {
+    background: transparent;
+    border: none;
+    color: #D7AA5A;
+    padding: 2px 6px;
+    min-height: 0;
+    font-size: 12px;
+}
+QPushButton#BatchLink:disabled { color: #303338; }
+QPushButton#BatchFlag, QPushButton#BatchStarApply {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 2px 10px;
+    min-height: 0;
+    font-size: 12px;
+}
+QPushButton#BatchFlag:hover, QPushButton#BatchStarApply:hover {
+    border-color: #D7AA5A;
+    color: #D7AA5A;
+}
+QPushButton#BatchFlag:disabled, QPushButton#BatchStarApply:disabled {
+    color: #303338;
+    border-color: #303338;
+}
+QComboBox#BatchStar {
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 2px 6px;
+    min-height: 0;
+    font-size: 12px;
+    background-color: #1C1F22;
+}
+QComboBox#BatchStar:disabled { color: #303338; }
+QPushButton#DangerButton {
+    background-color: #1C1F22;
+    border: 1px solid #D46A6A;
+    border-radius: 6px;
+    padding: 2px 10px;
+    min-height: 0;
+    font-size: 12px;
+    color: #D46A6A;
+}
+QPushButton#DangerButton:hover { background-color: #D46A6A; color: #0F1113; }
+QPushButton#DangerButton:disabled { color: #303338; border-color: #303338; }

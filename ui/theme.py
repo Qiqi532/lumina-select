@@ -166,4 +166,65 @@ QPushButton#TaskCancel {{
 }}
 QPushButton#TaskCancel:hover {{ border-color: {color['danger']}; color: {color['danger']}; }}
 QPushButton#TaskCancel:disabled {{ color: {color['border']}; border-color: {color['border']}; }}
+/* ---- 【T-10】批量操作条 ---- */
+QWidget#BatchBar {{
+    background-color: {color['surface']};
+    border: 1px solid {color['border']};
+    border-radius: 8px;
+    padding: 4px 6px;
+}}
+QLabel#BatchCount {{ color: {color['text']}; font-weight: 700; font-size: 12px; }}
+QLabel#BatchMuted {{ color: {color['muted']}; font-size: 12px; }}
+QPushButton#BatchLink {{
+    background: transparent;
+    border: none;
+    color: {color['accent']};
+    padding: 2px 6px;
+    min-height: 0;
+    font-size: 12px;
+}}
+QPushButton#BatchLink:disabled {{ color: {color['border']}; }}
+QPushButton#BatchFlag, QPushButton#BatchStarApply {{
+    background-color: {color['card']};
+    border: 1px solid {color['border']};
+    border-radius: 6px;
+    padding: 2px 10px;
+    min-height: 0;
+    font-size: 12px;
+}}
+QPushButton#BatchFlag:hover, QPushButton#BatchStarApply:hover {{
+    border-color: {color['accent']};
+    color: {color['accent']};
+}}
+QPushButton#BatchFlag:disabled, QPushButton#BatchStarApply:disabled {{
+    color: {color['border']};
+    border-color: {color['border']};
+}}
+QComboBox#BatchStar {{
+    border: 1px solid {color['border']};
+    border-radius: 6px;
+    padding: 2px 6px;
+    min-height: 0;
+    font-size: 12px;
+    background-color: {color['card']};
+}}
+QComboBox#BatchStar:disabled {{ color: {color['border']}; }}
+/* 危险动作：只有"清理已排除项"用，且不填色 —— 靠描边区分，避免误点 */
+QPushButton#DangerButton {{
+    background-color: {color['card']};
+    border: 1px solid {color['danger']};
+    border-radius: 6px;
+    padding: 2px 10px;
+    min-height: 0;
+    font-size: 12px;
+    color: {color['danger']};
+}}
+QPushButton#DangerButton:hover {{
+    background-color: {color['danger']};
+    color: {color['background']};
+}}
+QPushButton#DangerButton:disabled {{
+    color: {color['border']};
+    border-color: {color['border']};
+}}
 """

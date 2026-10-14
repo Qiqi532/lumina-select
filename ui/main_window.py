@@ -39,7 +39,14 @@ from engine import config
 from engine.catalog_registry import CatalogRegistry, read_photo_count
 from engine.log import get_logger
 from engine.store import PhotoStore
+from engine.user_settings import UserSettings
 from services.command_catalog import build_registry
+from services.shortcut_settings import (
+    DEFAULT_BINDINGS,
+    ShortcutConflict,
+    load_bindings,
+    save_bindings,
+)
 from services.events import EventBus
 from services.task_center import TaskCenter
 from .pages.analyze_page import AnalyzePage
@@ -47,6 +54,7 @@ from .pages.export_page import ExportPage
 from .pages.import_page import ImportPage
 from .pages.library_page import LibraryPage
 from .pages.review_page import ReviewPage
+from .settings import open_settings
 from .task_panel import TaskPanel
 
 _log = get_logger("ui.main")
@@ -101,6 +109,13 @@ class MainWindow(QMainWindow):
         # 而不是各自轮询 Task 对象 —— 保证两边看到同一份事实。
         self.events = EventBus()
         self.tasks = TaskCenter()
+        # 【T-11】全局用户设置（跨项目、跨重启）。拿不到可写位置时不能让程序起不来
+        # —— 退化成"用默认键位、不记住改动"，比直接崩要好。
+        self.user_settings = self._open_user_settings()
+        self.shortcut_bindings = (
+            load_bindings(self.user_settings) if self.user_settings is not None
+            else dict(DEFAULT_BINDINGS)
+        )
         self.current_stage_name = "import"
         self._project_pages: dict[str, QWidget] = {}
 
@@ -152,6 +167,13 @@ class MainWindow(QMainWindow):
         )
         self.decisions_export_button.clicked.connect(lambda: self.export_review_list())
         state_row.addWidget(self.decisions_export_button)
+        # 【T-11】快捷键设置入口。设置是**跨项目**的（存在全局设置库），
+        # 所以放在顶栏而不是某个页面里。
+        self.settings_button = QPushButton("快捷键设置")
+        self.settings_button.setObjectName("SettingsButton")
+        self.settings_button.setToolTip("自定义快捷键（保存在本机，重启后仍生效）")
+        self.settings_button.clicked.connect(self.open_settings_dialog)
+        state_row.addWidget(self.settings_button)
         root_layout.addLayout(state_row)
 
         self.stack = QStackedWidget()
@@ -208,7 +230,16 @@ class MainWindow(QMainWindow):
     def _install_project_pages(self) -> None:
         """按当前 ``self.store`` 创建/替换依赖 store 的页面。"""
         old_review, old_export = self.review_page, self.export_page
-        self.review_page = ReviewPage(self.store)
+        # 【T-10】命令表随 store 重建（见 _switch_project），这里必须传当下的那份，
+        # 否则清理命令会写进上一个项目的库。
+        self.review_page = ReviewPage(
+            self.store, commands=self.commands, bindings=self.shortcut_bindings
+        )
+        # 【T-11】复核页自身无法完成的两个动作交给 Shell：跨页导航与状态栏提示。
+        self.review_page.navigate_requested.connect(self.goto)
+        self.review_page.notice_requested.connect(
+            lambda message: self.statusBar().showMessage(message)
+        )
         self.export_page = ExportPage(self.store)
         self.stack.addWidget(self.review_page)
         self.stack.addWidget(self.export_page)
@@ -600,6 +631,43 @@ class MainWindow(QMainWindow):
             self.show_error(f"导出已复核清单失败：{error}")
             return
         self.status(f"已导出 {result['rows']} 条人工复核记录 → {result['path']}")
+
+    # ------------------------------------------------------------------
+    # 【T-11】快捷键设置
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _open_user_settings():
+        """打开全局设置库；失败时返回 ``None``（退化为"用默认键位、不记住改动"）。
+
+        不能让"设置文件写不了"变成"程序起不来" —— 那是最糟的失败形态。
+        """
+        try:
+            return UserSettings()
+        except Exception as error:  # noqa: BLE001
+            _log.warning("全局设置库不可用，快捷键将不持久化：%s", error)
+            return None
+
+    def open_settings_dialog(self) -> None:
+        if self.user_settings is None:
+            self.show_error("设置库不可用，快捷键无法保存（本次仍可按默认键位使用）")
+            return
+        updated = open_settings(self.shortcut_bindings, self)
+        if updated is None:
+            return
+        try:
+            self.shortcut_bindings = save_bindings(self.user_settings, updated)
+        except ShortcutConflict as conflict:
+            self.show_error(str(conflict))
+            return
+        self._apply_shortcut_bindings()
+
+    def _apply_shortcut_bindings(self) -> None:
+        """把新键位装到复核页上（重建页面代价太大，这里只重装 QAction）。"""
+        page = self.review_page
+        if page is None:
+            return
+        page.install_shortcuts(self.shortcut_bindings)
+        self.status("快捷键已更新")
 
     def status(self, message: str) -> None:
         self.statusBar().showMessage(message)

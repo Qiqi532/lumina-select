@@ -1,16 +1,18 @@
 # 📷 Lumina Select · 光影选片助手
 
 本地 AI 智能选片工具：**废片剔除 → 相似分组 → 场景自适应评分 → 最佳帧推荐 → 不确定甄选**，一键导出保留片。
-照片全程本地处理、不上传；GUI 为 **PyQt6 桌面原生窗口**（无浏览器、无参数面板），算法核心在 `engine/`（纯 Python，可独立命令行调试）。
+照片全程本地处理、不上传；GUI 为 **PySide6 桌面原生窗口**（无浏览器、无参数面板），算法核心在 `engine/`（纯 Python，可独立命令行调试）。
 
-**技术栈**：Torch/CLIP/ViT + OpenCV 技术质量评分，共用 MediaPipe（人脸 / 闭眼）· pHash · SQLite（WAL）· PyQt6，经 PyInstaller / Inno Setup 打包。
+**技术栈**：Torch/CLIP/ViT + OpenCV 技术质量评分，共用 MediaPipe（人脸 / 闭眼）· pHash · SQLite（WAL）· PySide6，经 PyInstaller 打包。
+
+> **当前离线候选分支**：JPEG/PNG/RAW；CLIP 与闭眼 ViT 按 `release/models.lock.json` 固定修订并随 onedir 分发。小于 512 像素的分析图不自动按模糊判废；场景类别在独立人工样本通过验收前只用中性权重并进入待甄选。此分支不制作安装程序、GitHub Release 或版本标签，也不承诺最佳帧 Top-1 准确率。
 > ✅ v0.5 曾并行维护「标准版（Torch）」与「轻量版（OpenCV 启发式）」两条产品线。**v0.6 已收敛为单一版本，只发行标准版**：轻量后端 `HeuristicBackend`、进程级开关 `config.INFERENCE_BACKEND`、轻量打包四件套与轻量依赖锁**均已删除**——原因与迁移步骤见 `../单版本收敛方案_2026-10-10.md`。
 > 后端现在是**调用参数**、不是进程状态：`analyze_directory(root, db, backend="torch")`，默认值唯一来源为 `engine/inference.py` 的 `DEFAULT_BACKEND`。此举同时消除了 P0-1（切后端静默清空人工复核）的根因。
 
 **关键指标**（RTX 4060 Laptop，1000 张实测）：全流程 63.9 s（验收 ≤5 min）；增量重分析 3.87 s；复核阶段 1000 项加载 **0.026 s**、单个筛选 **≤0.3 ms**；断点续跑、分块流式内存控制（5000+ 张不爆内存）；pytest 单测 + 端到端冒烟。
 
 > **v0.6「单版本基线」已完成**（标签 `v0.6.0`）：单一发行线、数据保护（模型签名变化只重算指标、不再清空人工复核）、离线自足加载、降级可见、旧库升级明示化 + 已复核清单导出。
-> **尚未正式发行**：Lightroom / RAW / XMP 实机验收与 PyQt6/Qt 发行许可批准（门禁 G7）由维护者另行完成；记录表见 `docs/v0.5-manual-acceptance.md`。旧版性能数字仅供历史参考。
+> **尚未正式发行**：Lightroom / RAW / XMP 实机验收与 PySide6/Qt 发行许可人工复核（门禁 G7）由维护者另行完成；记录表见 `docs/v0.5-manual-acceptance.md`。旧版性能数字仅供历史参考。
 
 ---
 
@@ -65,7 +67,7 @@ v0.5 复核页提供虚拟胶片带、单图/对比画布、候选排行、全�
 ## 🏗 架构
 
 ```
-app_qt.py               PyQt6 桌面原生四阶段向导（①导入→②自动分析→③人工复核→④确认导出）
+app_qt.py               PySide6 桌面原生四阶段向导（①导入→②自动分析→③人工复核→④确认导出）
 engine/
   config.py            全项目可调参数唯一来源（阈值/权重/模型名/路径，界面与引擎同源）
   log.py               统一日志（控制台 + 文件 smart_cull.log）
@@ -138,7 +140,7 @@ v0.6 只发行一个版本，旧项目**可以直接打开，不需要重建**�
 ```
 
 #### 自包含 onedir 构建
-把全部依赖（torch / transformers / PyQt6 / mediapipe / 等）一并打进一个文件夹，双击 `光影选片助手.exe` 即可运行，**不要求源码或 .venv 在场**：
+把全部依赖（torch / transformers / PySide6 / mediapipe / 等）及两套锁定权重打进一个文件夹，双击 `光影选片助手.exe` 即可运行，**不要求源码或 .venv 在场**：
 ```bash
 # 一键打包自包含 onedir（首次约 3~8 分钟，体积较大）
 build_dist.bat
@@ -146,11 +148,11 @@ build_dist.bat
 set ZIP=1 & build_dist.bat
 ```
 - 产物：`dist\光影选片助手\` 文件夹（含 `光影选片助手.exe` + 全部依赖）。**整个文件夹拷贝到任意 Windows 机器双击即用**，无需 Python、无需 `.venv`。
-- 模型权重（CLIP / 闭眼 ViT / MediaPipe）**不打包**，首次运行经 HF 镜像自动下载到 exe 目录下的 `.hf_cache` / `.torch_cache`（由 `dist_runtime_hook.py` 重定向，不落 C 盘）。
+- CLIP 和闭眼 ViT 由 `scripts/stage_models.py` 从本地缓存逐文件校验后打入 `_internal/model_snapshots`；缺少或损坏会给出降级提示，冻结版不联网补齐。MediaPipe 随 Python 依赖打包。
 - 对应规格：`光影选片助手_dist.spec`（入口直接是 `app_qt.py`，显式保留 CLIP、ViT 与 FaceMesh 所需模块，不递归打包测试和无关模型族，且不包含 pyiqa）。
-- **2026-09-07 本机实测**：干净 CPU Torch 环境构建约 5 分钟，onedir 产物 910.0 MiB / 6608 个文件；Inno Setup 安装包 228.4 MiB。
+- 历史包体积数字不适用于包含两套权重的当前候选包；以本次 ZIP 与 SHA-256 为准。
 
-#### 制作安装包（单文件 setup.exe，含卸载）
+#### 历史安装脚本（本轮不构建）
 用 [Inno Setup](https://jrsoftware.org/isdl.php) 把方案 A 的 `dist\光影选片助手\` 封装为安装程序：
 ```bash
 # 1) 先有方案 A 产物 dist\光影选片助手\
@@ -158,7 +160,7 @@ set ZIP=1 & build_dist.bat
 # 3) 仅产出 Output\LuminaSelect-v0.5-standard-dev-candidate.exe
 ```
 - 安装后提供**桌面快捷方式 + 开始菜单项 + 标准卸载**；卸载时默认清理 `.hf_cache`/`.torch_cache` 模型缓存（见 `installer.iss`）。
-- 提示：模型会下载进安装目录，建议安装到有写入权限的位置；当前安装器使用用户级安装权限。
+- `installer.iss` 的历史版本编号仍需正式发行时单独整理；当前交付仅使用 onedir 和 ZIP。
 
 ### GPU 与降级说明
 - 有 CUDA GPU：CLIP / ViT 自动用 GPU，速度最快；OpenCV 技术质量评分保持 CPU 本地执行；
@@ -170,7 +172,7 @@ set ZIP=1 & build_dist.bat
 
 ### 🔌 离线能力（断网可完成分析）
 
-v0.6 把「离线可用」从"看运气"变成了**被测试守住的行为**（门禁 G3）：
+开发态仍可从本地 Hugging Face 缓存加载；当前冻结候选包在 `_internal/model_snapshots` 加载锁定权重，运行时强制设置 Hugging Face 离线模式：
 
 - **本地权重完整 ⇒ 直接以该快照目录为加载源**（`models_guard.local_model_source()`）。
   为什么不只是加个 `local_files_only=True`：`huggingface_hub` 在 **import 时**就把
@@ -189,13 +191,10 @@ v0.6 把「离线可用」从"看运气"变成了**被测试守住的行为**（
   （只读本地判定 + 接线）、`data/_offline_probe.py`（断网 + 空缓存探针）、
   `data/_cache_verify.py`（离线加载全部运行期模型）。
 
-> ⚠️ **模型权重仍不打包**（安装包因此维持约 2 GB）：**首次运行需要联网下载一次**（约 1 GB）。
-> 若要求"全新机器 + 断网首启即可完整分析"，需把权重打进分发包（+约 1 GB）——当前**不做**，
-> 这是刻意的取舍（首次下载体积本身就是离线体验的一部分）。
+随包快照由 `release/models.lock.json` 固定修订、大小与 SHA-256。复制便携目录时必须保留完整 `_internal`；校验失败会明确降级，不使用用户缓存或静默联网。
 
 ### 模型缓存（不落 C 盘）
-首次运行从 HuggingFace Hub 自动下载 CLIP / 闭眼 ViT / MediaPipe 权重，缓存于项目内
-`.hf_cache` / `.torch_cache`（打包态由 `dist_runtime_hook.py` 重定向到 exe 旁；开发态默认落用户缓存目录）。离线可复用已缓存权重。
+仅源码开发态在缺少本地快照时尝试下载 CLIP/闭眼 ViT 到项目内 `.hf_cache`；冻结候选包只读随包权重。照片和模型权重不提交 Git。
 
 ---
 
@@ -294,7 +293,7 @@ python -m pytest tests -m e2e
 
 - 项目代码：**Apache-2.0**（见 `LICENSE`）。
 - pyiqa 已从正式运行依赖、标准 PyInstaller spec 和发行内容中移除。
-- PyQt6/Qt 正式二进制发行必须有真实、可审计的许可批准依据；没有批准时只能构建开发候选包。
+- PySide6/Qt 正式二进制发行必须完成许可人工复核；当前只构建开发候选包。
 - 第三方包清单由 `scripts/check_release_licenses.py` 从精确锁和安装元数据生成；模型权重逐项说明见 `NOTICE.md`。
 
 ## 📄 更新日志
@@ -316,7 +315,7 @@ python -m pytest tests -m e2e
 重新分析不会被自动识别覆盖。
 
 **Q：会把我照片传到网上吗？**
-不会。所有处理在本机完成，仅在模型权重缺失时联网下载一次模型。
+不会。照片始终本地处理；冻结候选包的模型权重随包提供，不联网下载。
 
 **Q：RAW 支持吗？**
 扩展名识别已内置；安装 `rawpy` 后自动启用。未安装时仅处理 JPEG/PNG，不影响主流程。

@@ -31,7 +31,8 @@ def _isolated_pending():
 def test_record_then_drain_returns_entry_and_clears():
     degradations.record("美学与场景", "CUDA OOM", "改用 CPU")
     assert degradations.drain() == [
-        {"stage": "美学与场景", "reason": "CUDA OOM", "effect": "改用 CPU"}
+        {"stage": "美学与场景", "reason": "CUDA OOM", "effect": "改用 CPU",
+         "severity": "warning"}
     ]
     assert degradations.drain() == [], "drain 必须取走即清空"
 
@@ -75,6 +76,7 @@ def test_recorded_entry_is_not_mutated_by_later_edits():
     """record 传入的 entry 是被复制的，调用方事后改动字典不影响已记录内容。"""
     payload = {"stage": "闭眼分类器", "reason": "boom", "effect": "只用 EAR"}
     expected = copy.deepcopy(payload)
+    expected["severity"] = "warning"
     degradations.record(**payload)
     payload["reason"] = "变了"
     assert degradations.drain() == [expected]
@@ -97,3 +99,10 @@ def test_drain_is_safe_under_concurrent_record():
 
     assert len(degradations.drain()) == per_thread * n_threads
     assert degradations.drain() == []
+
+
+def test_severity_is_explicit_and_validated():
+    degradations.record("CLIP", "missing", "review", severity="critical")
+    assert degradations.drain()[0]["severity"] == "critical"
+    with pytest.raises(ValueError, match="severity"):
+        degradations.record("CLIP", "missing", "review", severity="silent")

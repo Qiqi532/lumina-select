@@ -63,6 +63,7 @@ def test_fallback_cpu_moves_model_and_head_and_records_degradation(monkeypatch):
         "stage": "美学与场景",
         "reason": "OutOfMemoryError: CUDA out of memory",
         "effect": "本次改用 CPU 推理；结果一致但更慢",
+        "severity": "info",
     }]
 
 

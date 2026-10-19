@@ -247,6 +247,40 @@ def test_review_decisions_survive_model_signature_change(
         assert "test-aesthetic-v2" in (store.get_meta("ai_models") or "")
 
 
+def test_quality_rule_change_backs_up_and_keeps_manual_review(
+    full_data_dir, tmp_db_path, monkeypatch
+):
+    from pathlib import Path
+    from engine import config
+
+    _run(full_data_dir, tmp_db_path)
+    target = full_data_dir[1]["sharp"]
+    with PhotoStore(tmp_db_path) as store:
+        store.set_pick(target, "P")
+        store.set_scene_manual(target, "人像")
+        original_signature = store.get_meta("ai_models")
+    monkeypatch.setattr(config, "QUALITY_RULE_VERSION", "test-new-quality-rule")
+    result = _run(full_data_dir, tmp_db_path)
+    backup = Path(result["upgrade"]["quality_backup"])
+    assert backup.is_file()
+    assert result["new_analyzed"] == 8
+    with PhotoStore(tmp_db_path) as store:
+        row = store.get_photo(target)
+        assert (row["label"], row["star"], row["scene_manual"]) == ("P", 5, "人像")
+        assert store.get_meta("ai_models") == original_signature
+        assert store.get_meta("quality_rules") == "test-new-quality-rule"
+
+
+def test_small_images_remain_reviewable_not_auto_blur_waste(full_data_dir, tmp_db_path):
+    _run(full_data_dir, tmp_db_path)
+    with PhotoStore(tmp_db_path) as store:
+        rows = store.all_photos()
+    assert rows
+    assert all(row["blur_reliable"] == 0 for row in rows)
+    assert all("模糊" not in (row["waste_reasons"] or "") for row in rows)
+    assert all(row["is_uncertain"] == 1 for row in rows)
+
+
 def test_switching_source_root_archives_and_restores_decisions(
     full_data_dir, tmp_db_path, tmp_path
 ):
@@ -363,6 +397,7 @@ def test_engine_side_degradations_are_merged_into_result(
         "stage": "美学与场景",
         "reason": "OutOfMemoryError: CUDA out of memory",
         "effect": "本次改用 CPU 推理；结果一致但更慢",
+        "severity": "warning",
     }]
     assert degradations.drain() == [], "取走后不得留残"
 
@@ -418,7 +453,8 @@ def test_cancelled_result_also_carries_engine_side_degradations(full_data_dir, t
 
     assert result["cancelled"] is True
     assert result["degradations"] == [
-        {"stage": "闭眼分类器", "reason": "RuntimeError: boom", "effect": "只用 EAR"}
+        {"stage": "闭眼分类器", "reason": "RuntimeError: boom", "effect": "只用 EAR",
+         "severity": "warning"}
     ]
     assert degradations.drain() == []
 
@@ -438,3 +474,133 @@ def test_each_analysis_run_resets_one_shot_engine_flags(
     _run(full_data_dir, tmp_db_path)
 
     assert faces._eye_failure_reported is False, "分析开始时必须重置一次性降级标志"
+
+
+# ---------------------------------------------------------------------------
+# 【修复 v0.7 / R-DEGRADE-1】场景未知（CLIP 降级）时必须改用中性权重，
+# 不得复用 "其他" 预设的人脸权重，否则人脸维度会以未声明的假设参与排序。
+#
+# 复现：`.workbuddy/_exp_degradation_impact.py`
+#   人像组在降级时被按 "其他" 评分 → X(脸好/略糊) 与 Y(脸差/更清晰) 的最佳帧翻转。
+# ---------------------------------------------------------------------------
+def test_unknown_scene_weights_are_the_preset_average():
+    """中性权重必须是三套预设的算术平均（无信息先验：不偏袒任何一类场景）。
+
+    两条不变量：① 等于三套预设的逐维平均；② 归一（和为 1，保证综合分落在 0-100）。
+    刻意保留 face 维度（平均后约 0.167），不置 0 —— 人脸/睁眼是真实测得的信号。
+    """
+    from engine import config
+
+    presets = [config.SCENE_PRESETS[k]["w"] for k in ("人像", "风光", "其他")]
+    expected = tuple(sum(col) / len(presets) for col in zip(*presets))
+
+    w = config.UNKNOWN_SCENE_WEIGHTS
+    assert len(w) == 4
+    for got, want in zip(w, expected):
+        assert got == pytest.approx(want), "中性权重必须是三套预设的逐维平均"
+    assert w[3] > 0.0, "人脸维度是真实信号，不应被置零"
+    assert abs(sum(w) - 1.0) < 1e-9, "权重必须归一，否则综合分不再落在 0-100"
+    assert all(x >= 0.0 for x in w)
+
+
+def test_degraded_run_scores_with_neutral_weights_not_other_preset(
+    full_data_dir, tmp_db_path, monkeypatch
+):
+    """CLIP 降级后，组内评分必须走中性权重，而不是 "其他" 预设。
+
+    断言方式：拿回落库的指标，分别按两种权重重算，证明实际落库的 comp_score
+    只与中性权重吻合（且两者在本例中确实不同 —— 否则此用例没有区分力）。
+    """
+    from engine import config, scorer
+
+    def boom(self, images):                       # noqa: ARG001
+        raise OSError("offline and no local snapshot")
+
+    monkeypatch.setattr(_StubBackend, "scene_and_aesthetics", boom)
+
+    _run(full_data_dir, tmp_db_path)
+
+    with PhotoStore(tmp_db_path) as store:
+        row = next(r for r in store.all_photos() if r["path"].endswith("burstA_0.jpg"))
+
+    metrics = {
+        "blur_score": row["blur_score"], "over": row["over_ratio"],
+        "under": row["under_ratio"], "aesthetic": 50.0, "quality": row["brisque"],
+        "is_face": False, "blur_reliable": bool(row["blur_reliable"]),
+    }
+    expected_neutral = scorer.analyze_photo_score(
+        metrics, "其他", config.UNKNOWN_SCENE_WEIGHTS)["comp_score"]
+    expected_other = scorer.analyze_photo_score(metrics, "其他", None)["comp_score"]
+
+    assert expected_neutral != pytest.approx(expected_other), (
+        "两种权重在本例中必须可区分，否则本用例无法证明接线正确"
+    )
+    assert row["comp_score"] == pytest.approx(expected_neutral), (
+        "场景未知时必须用中性权重评分；用 '其他' 预设会让人脸维度参与排序"
+    )
+
+
+def test_known_scene_still_uses_preset_weights(full_data_dir, tmp_db_path):
+    """人工指定场景时使用相应预设权重。"""
+    from engine import config, scorer
+
+    analyze_directory(str(full_data_dir[0]), tmp_db_path, use_faces=False,
+                      backend=STUB_BACKEND, forced_scene="其他")
+
+    with PhotoStore(tmp_db_path) as store:
+        row = next(r for r in store.all_photos() if r["path"].endswith("burstA_0.jpg"))
+
+    metrics = {
+        "blur_score": row["blur_score"], "over": row["over_ratio"],
+        "under": row["under_ratio"], "aesthetic": 50.0, "quality": row["brisque"],
+        "is_face": False, "blur_reliable": bool(row["blur_reliable"]),
+    }
+    expected_other = scorer.analyze_photo_score(metrics, "其他", None)["comp_score"]
+    expected_neutral = scorer.analyze_photo_score(
+        metrics, "其他", config.UNKNOWN_SCENE_WEIGHTS)["comp_score"]
+
+    assert row["comp_score"] == pytest.approx(expected_other)
+    assert row["comp_score"] != pytest.approx(expected_neutral)
+
+
+def test_unvalidated_automatic_scene_uses_neutral_and_review(full_data_dir, tmp_db_path):
+    from engine import config, scorer
+
+    _run(full_data_dir, tmp_db_path)  # stub returns high-confidence automatic "其他"
+    with PhotoStore(tmp_db_path) as store:
+        row = next(r for r in store.all_photos() if r["path"].endswith("burstA_0.jpg"))
+    metrics = {
+        "blur_score": row["blur_score"], "blur_reliable": bool(row["blur_reliable"]),
+        "over": row["over_ratio"], "under": row["under_ratio"],
+        "aesthetic": 50.0, "quality": row["brisque"], "is_face": False,
+    }
+    expected = scorer.analyze_photo_score(
+        metrics, "其他", config.UNKNOWN_SCENE_WEIGHTS)["comp_score"]
+    assert row["comp_score"] == pytest.approx(expected)
+    assert row["is_uncertain"] == 1
+    assert row["is_best"] == 0
+
+
+def test_explicit_weights_override_neutral_fallback(full_data_dir, tmp_db_path, monkeypatch):
+    """调用方显式传入 weights 时优先级最高 —— 降级也不得覆盖用户/调用方的口径。"""
+    from engine import scorer
+
+    def boom(self, images):                       # noqa: ARG001
+        raise OSError("offline and no local snapshot")
+
+    monkeypatch.setattr(_StubBackend, "scene_and_aesthetics", boom)
+
+    custom = (0.10, 0.10, 0.10, 0.70)
+    analyze_directory(str(full_data_dir[0]), tmp_db_path, use_faces=False,
+                      backend=STUB_BACKEND, weights=custom)
+
+    with PhotoStore(tmp_db_path) as store:
+        row = next(r for r in store.all_photos() if r["path"].endswith("burstA_0.jpg"))
+
+    metrics = {
+        "blur_score": row["blur_score"], "over": row["over_ratio"],
+        "under": row["under_ratio"], "aesthetic": 50.0, "quality": row["brisque"],
+        "is_face": False, "blur_reliable": bool(row["blur_reliable"]),
+    }
+    expected_custom = scorer.analyze_photo_score(metrics, "其他", custom)["comp_score"]
+    assert row["comp_score"] == pytest.approx(expected_custom)

@@ -11,7 +11,8 @@ from PIL import Image
 from PySide6.QtWidgets import QApplication
 
 from engine import inference
-from engine.faces import detect_face_ear
+from engine.faces import detect_face_ear, _get_eye_classifier
+from engine import aesthetics, config, models_guard
 from engine.pipeline import analyze_directory
 from engine.store import PhotoStore
 from services.asset_pairing import assets_from_rows
@@ -45,6 +46,13 @@ def run_smoke_payload(root: Path) -> dict:
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     with ThreadPoolExecutor(max_workers=1) as pool:
         analyzed = pool.submit(analyze_directory, str(source_dir), str(db_path), use_faces=False).result()
+    # The synthetic photo has no guaranteed face. Load ViT explicitly so smoke
+    # verifies both bundled model families rather than CLIP alone.
+    eye_model, _, _ = _get_eye_classifier()
+    model_sources = {
+        "clip": models_guard.local_model_source(config.CLIP_MODEL_NAME),
+        "eye": models_guard.local_model_source(config.EYE_MODEL_NAME),
+    }
 
     delivery = root / "delivery"
     runtime_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
@@ -74,6 +82,9 @@ def run_smoke_payload(root: Path) -> dict:
         "backend": analyzed.get("backend") or inference.DEFAULT_BACKEND,
         "started": started,
         "analyzed": analyzed["new_analyzed"],
+        "clip_loaded": aesthetics._model is not None,
+        "eye_loaded": eye_model is not None,
+        "model_sources": model_sources,
         # 【v0.6 S2-2 / G3】把降级项带进报告：冒烟在断网 + 空缓存下**也应该**
         # 完成分析（阶段一可用），但必须能一眼看出这次是不是走了降级路径 ——
         # 否则"断网也能跑通"会被误读成"模型都加载上了"。

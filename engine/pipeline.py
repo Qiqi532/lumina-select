@@ -65,7 +65,7 @@ CHUNK = max(QUALITY_WORKERS * 4, 8)
 # 阶段一负责写入的度量列。解码失败时用它们把库中已有值原样带回去，
 # 避免"临时读取失败"把上一轮算好的指标抹成 NULL（见 _write_stage1_batch）。
 _STAGE1_METRIC_FIELDS = (
-    "blur_score", "over_ratio", "under_ratio", "brisque",
+    "blur_score", "blur_reliable", "over_ratio", "under_ratio", "brisque",
     "is_face", "eye_open", "eye_close_prob", "phash",
 )
 
@@ -168,7 +168,9 @@ def _write_stage1_batch(store: PhotoStore, metas: list[dict], results: list[dict
             rows.append(row)
             continue
         rows.append({**base,
-                     "blur_score": s1["blur_score"], "over_ratio": s1["over"],
+                     "blur_score": s1["blur_score"],
+                     "blur_reliable": int(s1.get("blur_reliable", True)),
+                     "over_ratio": s1["over"],
                      "under_ratio": s1["under"], "brisque": s1["quality"],
                      "is_face": int(s1["is_face"]), "eye_open": s1["ear"],
                      "eye_close_prob": s1["eye_close_prob"], "phash": s1["phash"]})
@@ -242,6 +244,7 @@ def _run_stage1(store: PhotoStore, metas: list[dict], idxs: list[int],
             results.append({
                 "ok": True,
                 "blur_score": r["q"]["blur_score"],
+                "blur_reliable": r["q"].get("blur_reliable", True),
                 "over": r["q"]["over"], "under": r["q"]["under"],
                 "quality": qscores.get(k),      # 0-100，越高越好（可为 None）
                 "is_face": face["is_face"], "ear": face["ear"],
@@ -397,9 +400,12 @@ def analyze_directory(root: str, db_path: str,
         else:
             prev_sig = store.get_meta("ai_models")
             cur_sig = _ai_model_signature(backend_impl)
-            if (prev_sig and prev_sig != cur_sig) or (
+            prev_quality = store.get_meta("quality_rules")
+            quality_changed = store.count_photos() > 0 and prev_quality != config.QUALITY_RULE_VERSION
+            models_changed = (prev_sig and prev_sig != cur_sig) or (
                 prev_sig is None and store.count_photos() > 0
-            ):
+            )
+            if quality_changed or models_changed:
                 # 【P0-1 修复】模型签名变化只清"模型派生度量"，保留人工决策。
                 # 旧实现调用 clear_all()，把 star / label / decision_source 连同
                 # 人工场景修正一起删掉——摄影师的复核结果被静默抹除。
@@ -411,10 +417,14 @@ def analyze_directory(root: str, db_path: str,
                 # 分数悄悄换一套。旧库（含轻量版 heuristic 产物）也在这条路径上。
                 decisions = store.count_decisions()
                 legacy_backends = store.legacy_backends()
+                quality_backup = store.backup_for_quality_rules() if quality_changed else None
                 store.reset_metrics()
                 upgrade = {
                     "recomputed": True,
-                    "reason": "模型签名变化" if prev_sig else "旧库缺少模型签名",
+                    "reason": ("质量规则变化" if quality_changed and not models_changed
+                               else "模型与质量规则变化" if quality_changed
+                               else "模型签名变化" if prev_sig else "旧库缺少模型签名"),
+                    "quality_backup": str(quality_backup) if quality_backup else None,
                     "previous_models": prev_sig,
                     "current_models": cur_sig,
                     "decisions_preserved": decisions,
@@ -515,6 +525,7 @@ def analyze_directory(root: str, db_path: str,
                             "stage": "美学与场景",
                             "reason": stage2_error,
                             "effect": "本次评分未使用美学/场景信号；模型就绪后重跑会自动补齐",
+                            "severity": "critical",
                         })
                         if progress_cb:
                             progress_cb("美学与场景", len(order), len(order))
@@ -568,8 +579,29 @@ def analyze_directory(root: str, db_path: str,
             if idx in clip_res:
                 return clip_res[idx]["scene"], clip_res[idx]["scene_conf"]
             if old_row and old_row.get("scene"):
-                return old_row["scene"], old_row.get("scene_conf") or 1.0
-            return "其他", 1.0
+                # 【修复 v0.7 / R-DEGRADE-2】旧写法是 `... or 1.0`，会把合法的
+                # 0.0 置信度当成假值替换成 1.0（与 resolve_aesthetic 用
+                # `is not None` 的口径不一致）。0.0 是"极不确定"，抬成 1.0 会让
+                # 规则3（场景置信度低 → 待甄选）失效。仅在真正缺失(None)时兜底。
+                conf = old_row.get("scene_conf")
+                return old_row["scene"], (1.0 if conf is None else float(conf))
+            return "其他", 0.0
+
+        def has_real_scene(idx) -> bool:
+            """该张是否有**真实**场景来源（区别于"其他"兜底）。
+
+            【修复 v0.7 / R-DEGRADE-1】用于判定整组场景是否可信。若整组都无真实来源
+            （典型：CLIP 降级），评分必须改用中性权重，而不是按 "其他" 预设 —— 否则
+            人脸维度会以未声明的假设参与排序（实测可翻转最佳帧），详见
+            engine/config.py::UNKNOWN_SCENE_WEIGHTS 的说明。
+            """
+            p = meta[idx]["path"]
+            if p in scene_override or forced_scene:
+                return True
+            old_row = old_map.get(p)
+            if old_row and (old_row.get("scene_manual") or old_row.get("scene")):
+                return True
+            return idx in clip_res
 
         def resolve_aesthetic(idx):
             if idx in clip_res:
@@ -610,7 +642,24 @@ def analyze_directory(root: str, db_path: str,
             else:
                 scene = "其他"
             confs = [resolve_scene(i)[1] for i in member_idx]
-            group_conf = sum(confs) / len(confs) if confs else 1.0
+            group_conf = sum(confs) / len(confs) if confs else 0.0
+
+            # 【修复 v0.7 / R-DEGRADE-1】整组是否拥有**真实**场景来源。
+            # 若整组都只有兜底的 "其他"（CLIP 降级），改用"未知场景"的中性权重
+            # （三套预设的算术平均），而不是复用 "其他" 预设 —— 后者把"没有信息"
+            # 当成"已分类为其他"，同一张照片会因 CLIP 是否可用而拿到不同权重。
+            # 显式传入的 weights（界面滑块 / 调用方覆盖）优先级最高，不受此影响。
+            group_scene_known = any(has_real_scene(i) for i in member_idx)
+            scene_validated = (scene in config.SCENE_ADAPTIVE_CLASSES or
+                               bool(forced_scene) or any(
+                                   meta[i]["path"] in scene_override or
+                                   bool((old_map.get(meta[i]["path"]) or {}).get("scene_manual"))
+                                   for i in member_idx))
+            group_weights = weights if weights is not None else (
+                None if group_scene_known and scene_validated
+                else config.UNKNOWN_SCENE_WEIGHTS)
+            if not group_scene_known or not scene_validated:
+                group_conf = 0.0
 
             # 组内每张的综合分
             scored = []
@@ -621,6 +670,7 @@ def analyze_directory(root: str, db_path: str,
                     old = old_map.get(p) or {}
                     m = {"ok": True,
                          "blur_score": old.get("blur_score") or 0.0,
+                         "blur_reliable": bool(old.get("blur_reliable")),
                          "over": old.get("over_ratio") or 0.0,
                          "under": old.get("under_ratio") or 0.0,
                          "is_face": bool(old.get("is_face")),
@@ -628,15 +678,18 @@ def analyze_directory(root: str, db_path: str,
                          "quality": old.get("brisque"),
                          "eyes_closed": _eyes_closed_from_row(old)}
                 aes = resolve_aesthetic(i)
-                s, _ = resolve_scene(i)
-                photo_score = scorer.analyze_photo_score({**m, "aesthetic": aes}, scene, weights)
+                photo_score = scorer.analyze_photo_score(
+                    {**m, "aesthetic": aes}, scene, group_weights)
                 # 闭眼硬判不再要求 scene == "人像"（见 scorer.waste_reasons）
                 hw = scorer.is_hard_waste(
                     scene, m["blur_score"], m["over"], m["under"],
                     bool(m.get("eyes_closed", False)), m.get("quality"),
-                    is_face=bool(m.get("is_face", False)))
+                    is_face=bool(m.get("is_face", False)),
+                    blur_reliable=bool(m.get("blur_reliable", True)))
                 scored.append({**photo_score, "path": p, "hard_waste": hw})
 
+            if any(not x.get("blur_reliable", True) for x in scored):
+                group_conf = 0.0
             verdict, picks = scorer.judge_and_pick(scored, scene, group_conf,
                                                    score_gap=score_gap,
                                                    scene_conf_low=scene_conf_low)
@@ -688,6 +741,7 @@ def analyze_directory(root: str, db_path: str,
 
                 # 指标取值：优先本次计算结果，否则回落到库中历史值
                 blur = m.get("blur_score") if m_ok else (old.get("blur_score") or 0.0)
+                blur_reliable = bool(m.get("blur_reliable", True)) if m_ok else bool(old.get("blur_reliable"))
                 over = m.get("over") if m_ok else (old.get("over_ratio") or 0.0)
                 under = m.get("under") if m_ok else (old.get("under_ratio") or 0.0)
                 qscore = m.get("quality") if m_ok else old.get("brisque")
@@ -697,7 +751,8 @@ def analyze_directory(root: str, db_path: str,
 
                 reasons = scorer.waste_reasons(
                     scene, blur, over, under, eyes_closed,
-                    dup=p in dup_paths, brisque=qscore, is_face=is_face)
+                    dup=p in dup_paths, brisque=qscore, is_face=is_face,
+                    blur_reliable=blur_reliable)
 
                 s, conf = resolve_scene(i)
                 aes = resolve_aesthetic(i)
@@ -722,6 +777,7 @@ def analyze_directory(root: str, db_path: str,
                     "scene": s if has_scene else None,
                     "scene_conf": conf if has_scene else None,
                     "blur_score": blur, "over_ratio": over, "under_ratio": under,
+                    "blur_reliable": int(blur_reliable),
                     "aesthetic": aes if has_aes else None,
                     "eye_open": (m.get("ear") if m_ok else old.get("eye_open")),
                     "is_face": int(is_face), "brisque": qscore,
@@ -752,6 +808,7 @@ def analyze_directory(root: str, db_path: str,
         # ---- 汇总 ----
         store.set_meta("source_root", root_abs)
         store.set_meta("ai_models", _ai_model_signature(backend_impl))
+        store.set_meta("quality_rules", config.QUALITY_RULE_VERSION)
         st = store.stats()
         _log.info("分析完成：%s 张，新增 %s，耗时 %.1fs", n, n_new, time.time() - t_start)
         _log.info(

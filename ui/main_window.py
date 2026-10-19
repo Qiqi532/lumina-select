@@ -565,8 +565,10 @@ class MainWindow(QMainWindow):
         if degradations:
             # 【v0.6 S2-2 / G3】降级必须对用户可见：否则用户会以为"AI 都算过了"，
             # 实际少了美学/场景这一半信号，却拿着一份看起来完全正常的甄选结果。
-            first = degradations[0]
-            detail = f"{first.get('stage', '未知阶段')}：{first.get('effect', '')}"
+            priority = {"critical": 2, "warning": 1, "info": 0}
+            first = max(degradations, key=lambda item: priority.get(item.get("severity", "warning"), 1))
+            level = {"critical": "严重", "warning": "警告", "info": "提示"}.get(first.get("severity"), "警告")
+            detail = f"{level} · {first.get('stage', '未知阶段')}：{first.get('effect', '')}"
             if len(degradations) > 1:
                 detail += f"（另有 {len(degradations) - 1} 项降级）"
             details.append(f"降级 · {detail}")

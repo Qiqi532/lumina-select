@@ -27,7 +27,7 @@ SECTIONS = (
 
 FIELDS = {
     "决策摘要": ("comp_score", "is_best", "is_uncertain"),
-    "评分明细": ("blur_score", "over_ratio", "under_ratio", "aesthetic", "eye_open"),
+    "评分明细": ("blur_score", "blur_reliable", "over_ratio", "under_ratio", "aesthetic", "eye_open"),
     "拍摄信息": (
         "fname", "width", "height", "camera_model", "lens_model",
         "focal_length", "shutter_speed", "aperture", "iso", "ts", "path",
@@ -43,6 +43,7 @@ FIELD_TITLES = {
     "is_best": "AI 推荐",
     "is_uncertain": "待确认",
     "blur_score": "清晰度",
+    "blur_reliable": "模糊判断",
     "over_ratio": "过曝比例",
     "under_ratio": "欠曝比例",
     "aesthetic": "美学评分",
@@ -179,7 +180,12 @@ class InspectorWidget(QScrollArea):
         self.manual_badge.setText("人工保留" if item.get("label") == "P" else "未人工保留")
         for field, label in self.value_labels.items():
             value = item.get(field)
-            label.setText(self._display(value))
+            if field == "blur_reliable":
+                label.setText("可自动判断" if value else "需人工确认")
+            elif field == "blur_score" and item.get("blur_reliable") == 0:
+                label.setText(f"{self._display(value)}（仅供参考）")
+            else:
+                label.setText(self._display(value))
             if field in self.score_bars:
                 bar = self.score_bars[field]
                 bar.setEnabled(value is not None)

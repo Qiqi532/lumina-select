@@ -19,7 +19,13 @@ def blur_score_from_gray(gray: np.ndarray) -> float:
         return 0.0
     if gray.ndim == 3:
         gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, (BLUR_ANALYZE_SIZE, BLUR_ANALYZE_SIZE))
+    height, width = gray.shape[:2]
+    longest = max(height, width)
+    if longest > BLUR_ANALYZE_SIZE:
+        scale = BLUR_ANALYZE_SIZE / longest
+        gray = cv2.resize(gray, (max(1, round(width * scale)),
+                                 max(1, round(height * scale))),
+                          interpolation=cv2.INTER_AREA)
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
@@ -56,6 +62,7 @@ def analyze_image_array(rgb: np.ndarray) -> dict:
     over, under = exposure_ratio_from_gray(gray)
     return {
         "blur_score": blur_score_from_gray(gray),
+        "blur_reliable": max(gray.shape[:2]) >= BLUR_ANALYZE_SIZE,
         "over": over,
         "under": under,
         "noise": noise_estimate_from_gray(gray),

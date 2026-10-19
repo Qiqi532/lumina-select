@@ -54,6 +54,14 @@ def test_missing_values_are_not_displayed_as_zero_and_badges_are_distinct(qtbot)
     assert "清晰" in inspector.value_labels["blur_score"].toolTip()
 
 
+def test_small_image_blur_is_marked_for_manual_review(qtbot):
+    inspector = InspectorWidget()
+    qtbot.addWidget(inspector)
+    inspector.set_item({"blur_score": 12.0, "blur_reliable": 0}, [])
+    assert inspector.value_labels["blur_reliable"].text() == "需人工确认"
+    assert "仅供参考" in inspector.value_labels["blur_score"].text()
+
+
 def test_face_click_emits_normalized_bbox_from_existing_preview(qtbot):
     image = QImage(200, 100, QImage.Format.Format_RGB32)
     image.fill(0xFF778899)

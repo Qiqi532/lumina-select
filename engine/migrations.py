@@ -6,7 +6,7 @@ import sqlite3
 from typing import Callable
 
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 class MigrationError(RuntimeError):
@@ -23,6 +23,7 @@ PHOTO_COLUMNS: tuple[tuple[str, str], ...] = (
     ("scene", "TEXT"),
     ("scene_conf", "REAL"),
     ("blur_score", "REAL"),
+    ("blur_reliable", "INT"),
     ("over_ratio", "REAL"),
     ("under_ratio", "REAL"),
     ("aesthetic", "REAL"),
@@ -144,9 +145,14 @@ def _migrate_to_v6(connection: sqlite3.Connection) -> None:
     _create_collections_table(connection)
 
 
+def _migrate_to_v7(connection: sqlite3.Connection) -> None:
+    _ensure_photo_columns(connection)
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     5: _migrate_to_v5,
     6: _migrate_to_v6,
+    7: _migrate_to_v7,
 }
 
 

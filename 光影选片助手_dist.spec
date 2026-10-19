@@ -7,8 +7,7 @@
 # 依赖（torch / transformers / PySide6 / mediapipe / 等）一并打进 onedir 文件夹，
 # 双击 dist/光影选片助手/光影选片助手.exe 即可运行，无需项目 .venv 与源码在场。
 #
-# 模型权重（CLIP / 闭眼 ViT / MediaPipe）不打包，首次运行时通过 HF 镜像下载到
-# exe 目录下的 .hf_cache / .torch_cache（见 dist_runtime_hook.py）。
+# CLIP 与闭眼 ViT 从经锁定清单校验的 model_snapshots 打入 _internal。
 #
 # 用法：build_dist.bat   （内部执行  pyinstaller 光影选片助手_dist.spec）
 # =============================================================================
@@ -30,6 +29,10 @@ import os as _os
 from importlib.util import find_spec as _find_spec
 if _os.path.isdir('models'):
     datas.append(('models', 'models'))
+if not _os.path.isdir('model_snapshots'):
+    raise FileNotFoundError('model_snapshots (run scripts/stage_models.py)')
+datas.append(('model_snapshots', 'model_snapshots'))
+datas.append(('release/models.lock.json', '.'))
 # 界面样式表：app_qt.py 从 _HERE（冻结态=_internal）读取 styles.qss
 if _os.path.isfile('styles.qss'):
     datas.append(('styles.qss', '.'))

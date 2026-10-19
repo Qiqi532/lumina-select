@@ -140,7 +140,8 @@ class ReviewService:
                 row.get("label") == "X" or bool(row.get("is_waste")) for row in rows
             ),
             has_technical_issue=any(
-                row.get("blur_score") is not None
+                bool(row.get("blur_reliable", True))
+                and row.get("blur_score") is not None
                 and float(row["blur_score"]) < config.BLUR_WASTE_THRESHOLD
                 or row.get("over_ratio") is not None
                 and float(row["over_ratio"]) > config.EXPO_WASTE_RATIO

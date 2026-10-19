@@ -52,7 +52,8 @@ Qt 组件、ExifTool 和模型权重仍受各自条款约束；自动检查是�
 | lxml | RAW XMP sidecar XML 合并 | lxml project | BSD-3-Clause |
 | ExifTool 13.59 | 导出副本的非 RAW 文件内 XMP | Phil Harvey | Artistic License 1.0 / GPL；Windows 归档 SHA-256 `44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec`，见 `release/exiftool.lock.json` |
 
-模型权重**不随包分发**：本地缺少时由程序联网下载到项目内 `.hf_cache`（打包态为 exe 目录下的
-`.hf_cache`）。本地权重完整时程序只读本地、不再联网（见 `README.md` 的「离线能力」）。
+当前开发候选包包含 `release/models.lock.json` 固定的 CLIP 与闭眼 ViT 快照，逐文件核对
+SHA-256 后打入 `_internal/model_snapshots`。冻结版不联网补齐缺失权重；源码开发态
+仍可使用项目内 `.hf_cache`。权重文件不进入 Git 仓库，也不随 PR 上传。
 任何正式候选都应以实际打包内容重新生成第三方清单并完成许可人工复核。
 当前安装器仅输出明确标记的开发候选包；尚未取得 Qt 许可批准，也未完成 Lightroom 实机验收。

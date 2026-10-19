@@ -36,13 +36,15 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 "%PY%" -m pytest -q tests\test_distribution_contracts.py
 if errorlevel 1 exit /b 1
+"%PY%" scripts\stage_models.py
+if errorlevel 1 exit /b 1
 
 echo.
 echo ============================================================
 echo   光影选片助手 —— 自包含 onedir 打包
 echo   解释器: %PY%
 echo   规格  : 光影选片助手_dist.spec
-echo   说明  : 打包全部依赖（torch/transformers/PyQt6/mediapipe 等），
+echo   说明  : 打包全部依赖（torch/transformers/PySide6/mediapipe 等），
 echo          产物可脱离 .venv 直接运行。
 echo ============================================================
 echo.

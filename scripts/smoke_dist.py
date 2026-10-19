@@ -61,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
             "QT_QPA_PLATFORM": "offscreen",
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
+            "HF_HOME": str(Path(directory) / "empty_hf_home"),
+            "HF_HUB_CACHE": str(Path(directory) / "empty_hf_home" / "hub"),
+            "TORCH_HOME": str(Path(directory) / "empty_torch_home"),
         })
         try:
             process = subprocess.run(
@@ -82,7 +85,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         if process.returncode != 0 and process.stderr:
             print(process.stderr[-4000:], file=sys.stderr)
-        return 0 if process.returncode == 0 and report.get("backend") == DEFAULT_BACKEND else 1
+        bundled = report.get("model_sources") or {}
+        internal = executable.parent / "_internal" / "model_snapshots"
+        sources_ok = all(
+            path and Path(path).is_relative_to(internal)
+            for path in (bundled.get("clip"), bundled.get("eye"))
+        )
+        return 0 if (process.returncode == 0 and
+                     report.get("backend") == DEFAULT_BACKEND and
+                     report.get("clip_loaded") and report.get("eye_loaded") and
+                     sources_ok and not report.get("degradations")) else 1
 
 
 if __name__ == "__main__":

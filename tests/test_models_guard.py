@@ -20,6 +20,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import json
+import sys
+
+import pytest
 
 from engine import models_guard
 
@@ -141,3 +146,25 @@ def test_clip_loader_falls_back_to_repo_id_without_snapshot(tmp_path, monkeypatc
 
     assert seen["processor"][0][0] == aesthetics.MODEL_NAME
     assert "local_files_only" not in seen["processor"][1]
+
+
+def test_frozen_model_is_verified_and_never_uses_cache(tmp_path, monkeypatch):
+    from engine import config
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config, "_BUNDLED_ROOT", str(tmp_path))
+    model = tmp_path / "model_snapshots" / "clip"
+    model.mkdir(parents=True)
+    (model / "config.json").write_bytes(b"trusted")
+    (tmp_path / "models.lock.json").write_text(json.dumps({"models": [{
+        "repo": CLIP_REPO, "directory": "clip",
+        "files": {"config.json": {"size": 7,
+                  "sha256": hashlib.sha256(b"trusted").hexdigest()}},
+    }]}), encoding="utf-8")
+    models_guard._validated_bundles.clear()
+    assert models_guard.local_model_source(CLIP_REPO) == str(model)
+    models_guard._validated_bundles.clear()
+    (model / "config.json").write_bytes(b"corrupt")
+    with pytest.raises(models_guard.ModelLoadError, match="SHA-256 mismatch"):
+        models_guard.local_model_source(CLIP_REPO)
+    models_guard._validated_bundles.clear()

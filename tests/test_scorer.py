@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 from engine import scorer
+
+
+def test_unreliable_blur_is_neutral_and_cannot_mark_waste():
+    metrics = {"blur_score": 0.0, "blur_reliable": False,
+               "quality": 0.0, "over": 0.0, "under": 0.0, "aesthetic": 50.0}
+    score = scorer.analyze_photo_score(metrics)
+    assert score["blur_n"] == 0.5
+    assert "模糊" not in scorer.waste_reasons(
+        "其他", 0.0, 0.0, 0.0, False, False, blur_reliable=False)
+    assert "模糊" in scorer.waste_reasons(
+        "其他", 0.0, 0.0, 0.0, False, False, blur_reliable=True)
 from engine.config import SCENE_PRESETS
 
 

@@ -45,11 +45,13 @@ def test_e2e_full_chain(full_data_dir, tmp_db_path, tmp_path):
               by_path[paths["burstA_2"]]["group_id"]}
         assert len(ga) == 1
 
-        # 模糊/过曝硬性废片
-        assert "模糊" in _hard_waste_reasons(by_path[paths["blurry"]])
+        # 夹具仅 64 px：模糊分不得用于自动判废，须人工确认；曝光仍可判废。
+        assert by_path[paths["blurry"]]["blur_reliable"] == 0
+        assert "模糊" not in _hard_waste_reasons(by_path[paths["blurry"]])
+        assert by_path[paths["blurry"]]["is_uncertain"] == 1
         assert "过曝/欠曝" in _hard_waste_reasons(by_path[paths["overexposed"]])
-        # 连拍 A 的模糊版是废片，清晰原图不是
-        assert "模糊" in _hard_waste_reasons(by_path[paths["burstA_1"]])
+        # 连拍 A 的小图模糊版同样不能自动剔除。
+        assert "模糊" not in _hard_waste_reasons(by_path[paths["burstA_1"]])
         assert _hard_waste_reasons(by_path[paths["burstA_0"]]) == []
 
     # 人工甄选 + 星级

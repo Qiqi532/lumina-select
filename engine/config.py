@@ -59,6 +59,7 @@ THUMB_CACHE_DIR = os.path.join(DATA_DIR, ".thumbcache")
 BLUR_WASTE_THRESHOLD = 60.0    # 拉普拉斯方差 < 60 视为严重模糊（废片）
 EXPO_WASTE_RATIO = 0.5         # 过曝/欠曝像素占比 > 0.5 视为严重
 BLUR_ANALYZE_SIZE = 512        # 拉普拉斯方差统一分析尺寸（保证可比）
+QUALITY_RULE_VERSION = "blur-aspect-no-upsample-small-review-v1"
 BRISQUE_ANALYZE_SIZE = 512     # BRISQUE 输入尺寸
 BRISQUE_SATURATED = 80.0       # BRISQUE ≥80 高度怀疑非自然内容（插画/截图）→ 中性化保护
 BRISQUE_WASTE_THRESHOLD = 50.0 # BRISQUE > 50 视为严重失真（仅作评分参考，不作废片触发源）
@@ -133,6 +134,7 @@ SCENES = [
     "其他 other",
 ]
 SCENE_CONF_THRESHOLD = 0.6     # 场景置信度 < 0.6 归入“其他”兜底
+SCENE_ADAPTIVE_CLASSES: tuple[str, ...] = ()  # 独立人工样本验收前保持中性权重
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"   # 美学 + 场景共用模型
 # LAION-Aesthetics 线性头（基于 openai/clip-vit-base-patch32 图像嵌入，约 3KB，随项目分发）
 AESTHETIC_HEAD_PATH = os.path.join(MODELS_DIR, "sa_0_4_vit_b_32_linear.pth")
@@ -146,6 +148,27 @@ SCENE_PRESETS = {
     "风光": {"w": (0.35, 0.30, 0.35, 0.00), "check_eye": False, "label": "风光"},
     "其他": {"w": (0.30, 0.20, 0.30, 0.20), "check_eye": True, "label": "其他"},
 }
+# --- 【修复 v0.7 / R-DEGRADE-1】场景**未知**时的中性权重 -----------------------------
+# 什么算"未知"：整组都没有真实场景来源 —— 既无本次 CLIP 结果，也无库中历史场景、
+# 无人工修正、无强制场景（典型情形：CLIP 后端降级不可用）。
+#
+# 为什么不能复用 "其他" 预设：`resolve_scene()` 在缺失信号时**兜底返回 "其他"**，
+# 于是"没有信息"被当成"分类结果是其他"来用权重。这会带来两个问题：
+#   1) 语义混淆：把"未知"伪装成"已分类为其他"，一次 CLIP 偶然可用 / 不可用，
+#      同一张照片会拿到不同权重，而数据里看不出哪种情况发生过；
+#   2) 实测可让**最佳帧推荐翻转**：例如人像连拍组在降级时被按 "其他" 评分，
+#      X(脸好/略糊) 与 Y(脸差/更清晰) 的胜者会随权重改变（人像权重选 X，其他权重选 Y）；
+#      风光连拍组同理（"其他" 与 "风光" 对 blur/expo 的相对权重不同，也会翻转）。
+#      回归用例见 tests/test_pipeline.py::test_degraded_run_scores_with_neutral_weights*。
+#
+# 取值 = **三套预设的算术平均**（对"场景"取无信息先验 → 不偏袒任何一类）：
+#   blur (0.25+0.35+0.30)/3 = 0.30000
+#   expo (0.20+0.30+0.20)/3 = 0.23333
+#   aes  (0.25+0.35+0.30)/3 = 0.30000
+#   face (0.30+0.00+0.20)/3 = 0.16667   ← 保留人脸维度
+# 刻意**保留** face 维度而非置 0：人脸与睁眼度是真实测得的信号（MediaPipe），
+# "不知道是什么场景"不等于"不知道有没有人脸"；置 0 会白白丢掉本就稀缺的可用信息。
+UNKNOWN_SCENE_WEIGHTS = (0.30, 0.70 / 3.0, 0.30, 0.50 / 3.0)
 BLUR_WASTE = BLUR_WASTE_THRESHOLD   # 严重模糊阈值（与质量检测同源）
 EXPO_WASTE = EXPO_WASTE_RATIO       # 严重过曝/欠曝占比
 EAR_WASTE = EAR_CLOSED_THRESHOLD    # 闭眼 EAR 阈值（与 faces 同源）

@@ -50,9 +50,10 @@ os.environ.setdefault("TORCH_HOME", os.path.join(_app, ".torch_cache"))
 os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(_app, ".hf_cache", "hub"))
 os.environ.setdefault("PYTHONPYCACHEPREFIX", os.path.join(_app, "pycache"))
 
-# 若已配置镜像（hf-mirror.com），保持透传；未配置则默认走国内镜像，便于首次下载。
-if not os.environ.get("HF_ENDPOINT"):
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# Frozen candidates never download model weights. Missing assets are visible errors.
+if getattr(sys, "frozen", False):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 # ---- 崩溃日志：本钩子在 PyInstaller 运行时最早加载，可捕获 import 阶段崩溃 ----

@@ -21,6 +21,7 @@ pycache/
 .venv-light/
 .pip_cache/
 .hf_cache/
+model_snapshots/
 .torch_cache/
 .pytest_cache/
 .mypy_cache/

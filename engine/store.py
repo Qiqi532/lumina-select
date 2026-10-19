@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS meta (
 # photos 表全部字段（用于 upsert 白名单）
 PHOTO_FIELDS = [
     "path", "fname", "ts", "mtime", "width", "height",
-    "scene", "scene_conf", "blur_score", "over_ratio", "under_ratio",
+    "scene", "scene_conf", "blur_score", "blur_reliable", "over_ratio", "under_ratio",
     "aesthetic", "eye_open", "is_face", "phash", "group_id",
     "comp_score", "is_waste", "is_best",
     "is_uncertain", "is_candidate", "candidate_rank", "star", "label", "waste_reasons",
@@ -90,7 +90,7 @@ PHOTO_FIELDS = [
 # 作业 star / label / decision_source / decision_updated_at / scene_manual。
 METRIC_FIELDS = [
     "scene", "scene_conf",
-    "blur_score", "over_ratio", "under_ratio",
+    "blur_score", "blur_reliable", "over_ratio", "under_ratio",
     "aesthetic", "eye_open", "is_face", "eye_close_prob", "brisque",
     "phash", "group_id", "comp_score",
     "is_waste", "is_best", "is_uncertain", "is_candidate", "candidate_rank",
@@ -215,6 +215,21 @@ class PhotoStore:
             self.conn.execute(f"UPDATE photos SET {assignments}")
             self.conn.execute("DELETE FROM groups")
             self.conn.execute("DELETE FROM face_regions")
+
+    def backup_for_quality_rules(self) -> Path:
+        """Back up the complete live SQLite database before changing quality metrics."""
+        base = Path(f"{self.db_path}.pre-quality.bak")
+        target = base
+        suffix = 1
+        while target.exists():
+            target = Path(f"{base}.{suffix}")
+            suffix += 1
+        backup = sqlite3.connect(target)
+        try:
+            self.conn.backup(backup)
+        finally:
+            backup.close()
+        return target
 
     def stash_decisions(self, key: str) -> int:
         """把库中全部人工决策快照写入 meta（换分析源前调用），返回条数。

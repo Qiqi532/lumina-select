@@ -25,9 +25,13 @@ _lock = threading.Lock()
 _pending: list[dict] = []
 
 
-def record(stage: str, reason: str, effect: str) -> None:
+def record(stage: str, reason: str, effect: str,
+           severity: str = "warning") -> None:
     """记录一条降级事件；同 (stage, reason, effect) 只记一次。"""
-    entry = {"stage": stage, "reason": reason, "effect": effect}
+    if severity not in {"info", "warning", "critical"}:
+        raise ValueError(f"invalid severity: {severity}")
+    entry = {"stage": stage, "reason": reason, "effect": effect,
+             "severity": severity}
     with _lock:
         if entry not in _pending:
             _pending.append(entry)

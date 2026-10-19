@@ -346,6 +346,7 @@ def _get_eye_classifier():
             "闭眼分类器",
             f"{type(error).__name__}: {error}",
             "闭眼 ViT 改用 CPU 推理；结果一致但更慢",
+            severity="info",
         )
     _eye_failure_reported = False      # 加载成功 ⇒ 允许下次故障重新提示一次
     return _eye_model, _eye_proc, _eye_dev

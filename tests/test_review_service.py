@@ -4,6 +4,12 @@ from engine.store import PhotoStore
 from services.review_service import ReviewFilter, ReviewService, ViewMode
 
 
+def test_small_blur_signal_is_not_a_technical_issue():
+    row = {"path": "small.jpg", "blur_score": 0.0, "blur_reliable": 0,
+           "over_ratio": 0.0, "under_ratio": 0.0}
+    assert ReviewService._item("small", [row]).has_technical_issue is False
+
+
 def _store(tmp_path):
     store = PhotoStore(str(tmp_path / "review.db"), enable_wal=False)
     rows = [
@@ -32,6 +38,7 @@ def _store(tmp_path):
                 "candidate_rank": {"a.CR3": 1, "b.CR3": 2}.get(path.rsplit("/", 1)[-1]),
                 "is_candidate": int(group is not None),
                 "blur_score": 12.0 if asset == "pair-e" else 88.0,
+                "blur_reliable": 1,
             }
         )
     store.set_group(1, 2, "/photos/a.CR3", is_uncertain=True, n_candidates=2)

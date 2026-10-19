@@ -80,7 +80,7 @@ def _fallback_cpu(reason: str, effect: str) -> torch.device:
             _head = (_head[0].to(_device), _head[1].to(_device))
         except Exception:  # pragma: no cover
             _log.warning("美学头回退 CPU 失败", exc_info=True)
-    degradations.record("美学与场景", reason, effect)
+    degradations.record("美学与场景", reason, effect, severity="info")
     return _device
 
 

@@ -62,6 +62,16 @@ def test_small_image_blur_is_marked_for_manual_review(qtbot):
     assert "仅供参考" in inspector.value_labels["blur_score"].text()
 
 
+def test_low_confidence_scene_keeps_candidate_but_marks_review(qtbot):
+    inspector = InspectorWidget()
+    qtbot.addWidget(inspector)
+    inspector.set_item({"scene": "街拍", "scene_conf": 0.42}, [])
+    assert inspector.value_labels["scene"].text() == "街拍（待确认）"
+    inspector.set_item({"scene": "街拍", "scene_conf": 0.42,
+                        "scene_manual": "街拍"}, [])
+    assert inspector.value_labels["scene"].text() == "街拍"
+
+
 def test_face_click_emits_normalized_bbox_from_existing_preview(qtbot):
     image = QImage(200, 100, QImage.Format.Format_RGB32)
     image.fill(0xFF778899)

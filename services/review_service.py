@@ -63,6 +63,12 @@ class BatchSnapshot:
     before: tuple[dict, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SceneSnapshot:
+    asset_id: str
+    before: tuple[tuple[str, str | None], ...]
+
+
 class ReviewService:
     MAX_UNDO = 200
 
@@ -92,7 +98,7 @@ class ReviewService:
         # RAW+JPEG 两张，用户点一下缩略图就应该整组一起动。
         self.selection: list[str] = []
         self._anchor: str | None = None
-        self._undo_stack: list[DecisionSnapshot | BatchSnapshot] = []
+        self._undo_stack: list[DecisionSnapshot | BatchSnapshot | SceneSnapshot] = []
         saved_mode = store.get_preference("review.view_mode")
         self._preferred_mode = ViewMode(saved_mode) if saved_mode in ViewMode._value2member_map_ else None
         self.reload()
@@ -464,15 +470,30 @@ class ReviewService:
             label = None
         self._apply(star=star, label=label)
 
+    def set_scene_manual(self, scene: str | None) -> None:
+        item = self.current
+        if item is None:
+            return
+        before = self.store.set_scene_manual_batch(list(item.paths), scene)
+        if not before:
+            return
+        self._undo_stack.append(SceneSnapshot(item.asset_id, tuple(before)))
+        if len(self._undo_stack) > self.MAX_UNDO:
+            self._undo_stack.pop(0)
+        self.reload()
+
     def undo(self) -> bool:
         if not self._undo_stack:
             return False
         snapshot = self._undo_stack.pop()
-        self.store.restore_decisions(snapshot.before)
+        if isinstance(snapshot, SceneSnapshot):
+            self.store.restore_scene_manual_batch(list(snapshot.before))
+        else:
+            self.store.restore_decisions(snapshot.before)
         self.reload()
         # 单张撤销回到那一张（用户要看见自己撤了什么）；批量撤销不聚焦 ——
         # 聚焦到其中任意一张都会让人误以为只有它变了。
-        if isinstance(snapshot, DecisionSnapshot):
+        if isinstance(snapshot, (DecisionSnapshot, SceneSnapshot)):
             self.focus(snapshot.asset_id)
         elif snapshot.asset_ids:
             self.focus(snapshot.asset_ids[0])

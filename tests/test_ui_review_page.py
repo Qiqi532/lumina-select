@@ -97,6 +97,29 @@ def test_keyboard_flow_updates_store_undo_counts_and_filters(qtbot, tmp_path):
         store.close()
 
 
+def test_scene_combo_updates_paired_raw_jpeg_and_undo(qtbot, tmp_path):
+    store = PhotoStore(str(tmp_path / "review.db"), enable_wal=False)
+    _populate(store)
+    store.upsert_photo({"path": "/photos/IMG_A.JPG", "fname": "IMG_A.JPG",
+                        "asset_pair_id": "candidate-a", "asset_role": "jpeg"})
+    page = ReviewPage(store, image_loader=_image, thumbnail_loader=_image)
+    qtbot.addWidget(page)
+    try:
+        page.review.focus("candidate-a")
+        page.refresh()
+        page.inspector.scene_combo.setCurrentIndex(
+            page.inspector.scene_combo.findData("风景")
+        )
+        assert store.get_photo("/photos/IMG_A.CR3")["scene_manual"] == "风景"
+        assert store.get_photo("/photos/IMG_A.JPG")["scene_manual"] == "风景"
+        page.actions["Ctrl+Z"].trigger()
+        assert store.get_photo("/photos/IMG_A.CR3")["scene_manual"] is None
+        assert store.get_photo("/photos/IMG_A.JPG")["scene_manual"] is None
+    finally:
+        page.shutdown()
+        store.close()
+
+
 def test_project_reopen_restores_view_and_splitter_widths(qtbot, tmp_path):
     path = tmp_path / "review.db"
     first = MainWindow(project_db=path)

@@ -20,7 +20,7 @@ import sys
 # 一、路径与目录（项目内所有缓存/数据，均不落 C 盘）
 # ===========================================================================
 # 根目录的双形态解析：
-#   开发态    → photo-cull-demo/（engine/ 的上一级）
+#   开发态    → 仓库根目录（engine/ 的上一级）
 #   打包态    → exe 所在目录（onedir 下 dist\光影选片助手\）。
 # 必须区分：PyInstaller onedir 打包后 __file__ 指向只读的 _internal，
 # 且安装目录可能是 Program Files —— 数据库/日志/模型缓存等可写内容
@@ -133,8 +133,20 @@ SCENES = [
     "静物/美食 still life",
     "其他 other",
 ]
-SCENE_CONF_THRESHOLD = 0.6     # 场景置信度 < 0.6 归入“其他”兜底
+SCENE_LABELS = ("人像", "风景", "街拍", "其他")
+SCENE_ALIASES = {
+    "人像": "人像", "风光": "风景", "风景": "风景",
+    "建筑/城市": "风景", "街拍/纪实": "街拍", "街拍": "街拍",
+    "宠物": "其他", "静物/美食": "其他", "其他": "其他",
+}
+SCENE_RULE_VERSION = "four-scene-map-v1"
+SCENE_CONF_THRESHOLD = 0.6     # 低置信度仅标记待确认，不改写候选类别
 SCENE_ADAPTIVE_CLASSES: tuple[str, ...] = ()  # 独立人工样本验收前保持中性权重
+
+
+def scene_label(value: str) -> str:
+    """将旧版七类名称映射到摄影师使用的四类标签。"""
+    return SCENE_ALIASES.get(value, value)
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"   # 美学 + 场景共用模型
 # LAION-Aesthetics 线性头（基于 openai/clip-vit-base-patch32 图像嵌入，约 3KB，随项目分发）
 AESTHETIC_HEAD_PATH = os.path.join(MODELS_DIR, "sa_0_4_vit_b_32_linear.pth")
@@ -142,10 +154,11 @@ AESTHETIC_HEAD_PATH = os.path.join(MODELS_DIR, "sa_0_4_vit_b_32_linear.pth")
 # ===========================================================================
 # 七、评分与甄选（scorer.py）
 # ===========================================================================
-# 三套场景预设：权重 (清晰, 曝光, 美学, 人脸) 与是否启用闭眼硬判
+# 四类场景预设：街拍先沿用均衡权重，不新增未经验证的评分参数。
 SCENE_PRESETS = {
     "人像": {"w": (0.25, 0.20, 0.25, 0.30), "check_eye": True, "label": "人像"},
-    "风光": {"w": (0.35, 0.30, 0.35, 0.00), "check_eye": False, "label": "风光"},
+    "风景": {"w": (0.35, 0.30, 0.35, 0.00), "check_eye": False, "label": "风景"},
+    "街拍": {"w": (0.30, 0.20, 0.30, 0.20), "check_eye": True, "label": "街拍"},
     "其他": {"w": (0.30, 0.20, 0.30, 0.20), "check_eye": True, "label": "其他"},
 }
 # --- 【修复 v0.7 / R-DEGRADE-1】场景**未知**时的中性权重 -----------------------------
@@ -161,7 +174,7 @@ SCENE_PRESETS = {
 #      风光连拍组同理（"其他" 与 "风光" 对 blur/expo 的相对权重不同，也会翻转）。
 #      回归用例见 tests/test_pipeline.py::test_degraded_run_scores_with_neutral_weights*。
 #
-# 取值 = **三套预设的算术平均**（对"场景"取无信息先验 → 不偏袒任何一类）：
+# 取值 = **三套不同权重档位的算术平均**（街拍暂与其他共用均衡档位）：
 #   blur (0.25+0.35+0.30)/3 = 0.30000
 #   expo (0.20+0.30+0.20)/3 = 0.23333
 #   aes  (0.25+0.35+0.30)/3 = 0.30000

@@ -296,7 +296,7 @@ def analyze_directory(root: str, db_path: str,
         progress_cb     optional 回调(阶段名, 完成数, 总数)
         cancel_check    optional 返回 True 时中止
         scene_override  optional {path: scene} 人工修正的场景覆盖
-        forced_scene    可选，强制整批按指定场景（人像/风光/其他）
+        forced_scene    可选，强制整批按指定场景（人像/风景/街拍/其他）
         weights         可选，自定义综合分权重 (w0,w1,w2,w3)，覆盖场景预设
         burst_interval_ms 可选，连拍间隔阈值覆盖（默认 config）
         phash_threshold 可选，pHash 距离阈值覆盖（默认 config）
@@ -358,6 +358,15 @@ def analyze_directory(root: str, db_path: str,
     phash_threshold = phash_threshold if phash_threshold is not None else config.PHASH_THRESHOLD
     score_gap = score_gap if score_gap is not None else config.SCORE_GAP
     scene_conf_low = scene_conf_low if scene_conf_low is not None else config.SCENE_CONF_LOW
+    if forced_scene is not None:
+        forced_scene = config.scene_label(forced_scene)
+        if forced_scene not in config.SCENE_LABELS:
+            raise ValueError(f"未知场景标签：{forced_scene}")
+    scene_override = {
+        path: config.scene_label(label) for path, label in (scene_override or {}).items()
+    }
+    if any(label not in config.SCENE_LABELS for label in scene_override.values()):
+        raise ValueError("场景覆盖包含未知标签")
 
     # ---- 0) 模型环境准备：缓存自愈 + 变量注入（避免离线/缓存残缺导致整体崩溃）----
     try:
@@ -435,6 +444,19 @@ def analyze_directory(root: str, db_path: str,
                     "（旧签名=%s，新签名=%s，过期后端=%s）",
                     decisions, prev_sig, cur_sig, legacy_backends or "无",
                 )
+        if store.count_photos() > 0 and store.get_meta("scene_rules") != config.SCENE_RULE_VERSION:
+            scene_backup = store.backup_for_scene_rules()
+            store.migrate_scene_rules()
+            if upgrade["recomputed"]:
+                upgrade["reason"] += "、场景规则变化"
+            else:
+                upgrade = {
+                    "recomputed": True,
+                    "reason": "场景规则变化",
+                    "decisions_preserved": store.count_decisions(),
+                }
+            upgrade["scene_backup"] = str(scene_backup)
+            _log.warning("场景规则已升级；原库备份：%s", scene_backup)
         meta: list[dict] = []
         old_map = store.photos_map()
         need_stage1: list[int] = []
@@ -535,7 +557,7 @@ def analyze_directory(root: str, db_path: str,
                         clip_res[i] = r
                         rows.append({"path": meta[i]["path"],
                                      "aesthetic": r["aesthetic"],
-                                     "scene": r["scene"],
+                                     "scene": config.scene_label(r["scene"]),
                                      "scene_conf": r["scene_conf"],
                                      "scene_model": backend_impl.aesthetic_model_name()})
                     # 【断点续跑】逐批回写美学/场景（批量事务）
@@ -565,8 +587,6 @@ def analyze_directory(root: str, db_path: str,
         _phase_end("相似聚类")
 
         # ---- 6) 场景覆盖（人工修正 / 强制场景）----
-        scene_override = scene_override or {}
-
         def resolve_scene(idx):
             p = meta[idx]["path"]
             if p in scene_override:
@@ -577,14 +597,14 @@ def analyze_directory(root: str, db_path: str,
             if old_row and old_row.get("scene_manual"):
                 return old_row["scene_manual"], 1.0
             if idx in clip_res:
-                return clip_res[idx]["scene"], clip_res[idx]["scene_conf"]
+                return config.scene_label(clip_res[idx]["scene"]), clip_res[idx]["scene_conf"]
             if old_row and old_row.get("scene"):
                 # 【修复 v0.7 / R-DEGRADE-2】旧写法是 `... or 1.0`，会把合法的
                 # 0.0 置信度当成假值替换成 1.0（与 resolve_aesthetic 用
                 # `is not None` 的口径不一致）。0.0 是"极不确定"，抬成 1.0 会让
                 # 规则3（场景置信度低 → 待甄选）失效。仅在真正缺失(None)时兜底。
                 conf = old_row.get("scene_conf")
-                return old_row["scene"], (1.0 if conf is None else float(conf))
+                return config.scene_label(old_row["scene"]), (1.0 if conf is None else float(conf))
             return "其他", 0.0
 
         def has_real_scene(idx) -> bool:
@@ -630,19 +650,19 @@ def analyze_directory(root: str, db_path: str,
                 return cancelled("评分与甄选")
             member_idx = [idx_of_path[p] for p in group]
 
-            # 场景：取组内主要场景（人像/风光优先于其他）
-            scene_counts: dict[str, int] = {}
+            # 人工修正优先；自动结果按组内多数决定，平票按固定标签顺序。
+            manual_scenes = []
             for i in member_idx:
-                s, _ = resolve_scene(i)
+                path = meta[i]["path"]
+                if path in scene_override or forced_scene or (old_map.get(path) or {}).get("scene_manual"):
+                    manual_scenes.append(resolve_scene(i)[0])
+            scene_counts: dict[str, int] = {}
+            for s in (manual_scenes or [resolve_scene(i)[0] for i in member_idx]):
                 scene_counts[s] = scene_counts.get(s, 0) + 1
-            if scene_counts.get("人像", 0) > 0:
-                scene = "人像"
-            elif scene_counts.get("风光", 0) > 0:
-                scene = "风光"
-            else:
-                scene = "其他"
+            scene = max(config.SCENE_LABELS,
+                        key=lambda label: scene_counts.get(label, 0))
             confs = [resolve_scene(i)[1] for i in member_idx]
-            group_conf = sum(confs) / len(confs) if confs else 0.0
+            group_conf = 1.0 if manual_scenes else (sum(confs) / len(confs) if confs else 0.0)
 
             # 【修复 v0.7 / R-DEGRADE-1】整组是否拥有**真实**场景来源。
             # 若整组都只有兜底的 "其他"（CLIP 降级），改用"未知场景"的中性权重
@@ -650,11 +670,9 @@ def analyze_directory(root: str, db_path: str,
             # 当成"已分类为其他"，同一张照片会因 CLIP 是否可用而拿到不同权重。
             # 显式传入的 weights（界面滑块 / 调用方覆盖）优先级最高，不受此影响。
             group_scene_known = any(has_real_scene(i) for i in member_idx)
-            scene_validated = (scene in config.SCENE_ADAPTIVE_CLASSES or
-                               bool(forced_scene) or any(
-                                   meta[i]["path"] in scene_override or
-                                   bool((old_map.get(meta[i]["path"]) or {}).get("scene_manual"))
-                                   for i in member_idx))
+            scene_validated = (bool(manual_scenes) or
+                               (scene in config.SCENE_ADAPTIVE_CLASSES and
+                                group_conf >= scene_conf_low))
             group_weights = weights if weights is not None else (
                 None if group_scene_known and scene_validated
                 else config.UNKNOWN_SCENE_WEIGHTS)
@@ -809,6 +827,7 @@ def analyze_directory(root: str, db_path: str,
         store.set_meta("source_root", root_abs)
         store.set_meta("ai_models", _ai_model_signature(backend_impl))
         store.set_meta("quality_rules", config.QUALITY_RULE_VERSION)
+        store.set_meta("scene_rules", config.SCENE_RULE_VERSION)
         st = store.stats()
         _log.info("分析完成：%s 张，新增 %s，耗时 %.1fs", n, n_new, time.time() - t_start)
         _log.info(

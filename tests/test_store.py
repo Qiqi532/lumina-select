@@ -75,6 +75,45 @@ def test_scene_manual_roundtrip(tmp_db_path):
     s.close()
 
 
+def test_scene_rule_migration_keeps_human_decisions_and_quality(tmp_db_path):
+    from engine import config
+
+    with store.PhotoStore(tmp_db_path) as s:
+        s.upsert_photo(_photo("/a/1.jpg", scene="风光", scene_conf=0.9,
+                              blur_score=125.0, aesthetic=72.0,
+                              scene_manual="建筑/城市", star=5, label="P",
+                              is_best=1))
+        backup = s.backup_for_scene_rules()
+        s.migrate_scene_rules()
+        row = s.get_photo("/a/1.jpg")
+        assert backup.is_file()
+        assert (row["scene_manual"], row["star"], row["label"]) == ("风景", 5, "P")
+        assert (row["blur_score"], row["aesthetic"]) == (125.0, 72.0)
+        assert row["scene"] is None
+        assert row["is_best"] is None
+        assert s.get_meta("scene_rules") == config.SCENE_RULE_VERSION
+
+
+def test_manual_scene_accepts_legacy_alias_and_rejects_unknown(tmp_db_path):
+    import pytest
+
+    with store.PhotoStore(tmp_db_path) as s:
+        s.upsert_photo(_photo("/a/1.jpg"))
+        s.set_scene_manual("/a/1.jpg", "街拍/纪实")
+        assert s.get_photo("/a/1.jpg")["scene_manual"] == "街拍"
+        with pytest.raises(ValueError, match="未知场景"):
+            s.set_scene_manual("/a/1.jpg", "婚礼")
+
+
+def test_legacy_stashed_scene_maps_when_source_is_restored(tmp_db_path):
+    with store.PhotoStore(tmp_db_path) as s:
+        s.upsert_photo(_photo("/a/1.jpg", scene_manual="街拍/纪实"))
+        s.stash_decisions("decisions:/a")
+        s.clear_all()
+        s.rehydrate_decisions("decisions:/a")
+        assert s.get_photo("/a/1.jpg")["scene_manual"] == "街拍"
+
+
 def test_context_manager(tmp_db_path):
     with store.PhotoStore(tmp_db_path) as s:
         s.upsert_photo(_photo("/a/1.jpg"))

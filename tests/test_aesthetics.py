@@ -124,3 +124,19 @@ def test_analyze_batch_does_not_retry_on_cpu_runtime_error(monkeypatch):
 
     assert calls["n"] == 1, "CPU 侧错误不得被当作 OOM 重试"
     assert degradations.drain() == []
+
+
+@pytest.mark.parametrize("index, expected", [
+    (0, "人像"), (1, "风景"), (2, "风景"), (3, "街拍"),
+    (4, "其他"), (5, "其他"), (6, "其他"),
+])
+def test_seven_prompt_results_map_to_four_labels(monkeypatch, index, expected):
+    def fake_forward(images, all_texts, n_good, n_bad, n_scene):  # noqa: ARG001
+        values = [0.05] * n_scene
+        values[index] = 0.4
+        return [values], [50.0]
+
+    monkeypatch.setattr(aesthetics, "_forward_and_score", fake_forward)
+    result = aesthetics.analyze_batch([Image.new("RGB", (16, 16))])[0]
+    assert result["scene"] == expected
+    assert result["scene_conf"] == pytest.approx(0.4)

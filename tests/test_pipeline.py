@@ -271,6 +271,33 @@ def test_quality_rule_change_backs_up_and_keeps_manual_review(
         assert store.get_meta("quality_rules") == "test-new-quality-rule"
 
 
+def test_scene_rule_upgrade_recomputes_only_clip_and_preserves_manual_review(
+    full_data_dir, tmp_db_path, monkeypatch
+):
+    from pathlib import Path
+    from engine import config
+
+    _run(full_data_dir, tmp_db_path)
+    target = full_data_dir[1]["sharp"]
+    with PhotoStore(tmp_db_path) as store:
+        store.set_pick(target, "P")
+        store.update_photo(target, scene_manual="风光")
+        original_signature = store.get_meta("ai_models")
+        original_blur = store.get_photo(target)["blur_score"]
+    monkeypatch.setattr(config, "SCENE_RULE_VERSION", "test-four-scene-upgrade")
+    result = _run(full_data_dir, tmp_db_path)
+    assert result["new_analyzed"] == 0
+    assert result["upgrade"]["reason"] == "场景规则变化"
+    assert Path(result["upgrade"]["scene_backup"]).is_file()
+    with PhotoStore(tmp_db_path) as store:
+        row = store.get_photo(target)
+        assert (row["label"], row["star"], row["scene_manual"]) == ("P", 5, "风景")
+        assert row["blur_score"] == original_blur
+        assert row["scene"] == "风景"
+        assert store.get_meta("ai_models") == original_signature
+    assert _run(full_data_dir, tmp_db_path)["upgrade"]["recomputed"] is False
+
+
 def test_small_images_remain_reviewable_not_auto_blur_waste(full_data_dir, tmp_db_path):
     _run(full_data_dir, tmp_db_path)
     with PhotoStore(tmp_db_path) as store:
@@ -491,7 +518,7 @@ def test_unknown_scene_weights_are_the_preset_average():
     """
     from engine import config
 
-    presets = [config.SCENE_PRESETS[k]["w"] for k in ("人像", "风光", "其他")]
+    presets = [config.SCENE_PRESETS[k]["w"] for k in ("人像", "风景", "其他")]
     expected = tuple(sum(col) / len(presets) for col in zip(*presets))
 
     w = config.UNKNOWN_SCENE_WEIGHTS
@@ -579,6 +606,35 @@ def test_unvalidated_automatic_scene_uses_neutral_and_review(full_data_dir, tmp_
     assert row["comp_score"] == pytest.approx(expected)
     assert row["is_uncertain"] == 1
     assert row["is_best"] == 0
+
+
+def test_low_confidence_scene_stays_neutral_even_if_class_is_enabled(
+    full_data_dir, tmp_db_path, monkeypatch
+):
+    from engine import config, scorer
+
+    monkeypatch.setattr(config, "SCENE_ADAPTIVE_CLASSES", ("人像",))
+    monkeypatch.setattr(
+        _StubBackend, "scene_and_aesthetics",
+        lambda self, images: [
+            {"aesthetic": 50.0, "scene": "人像", "scene_conf": 0.4}
+            for _ in images
+        ],
+    )
+    _run(full_data_dir, tmp_db_path)
+    with PhotoStore(tmp_db_path) as store:
+        row = next(r for r in store.all_photos() if r["path"].endswith("burstA_0.jpg"))
+    metrics = {
+        "blur_score": row["blur_score"], "blur_reliable": bool(row["blur_reliable"]),
+        "over": row["over_ratio"], "under": row["under_ratio"],
+        "aesthetic": 50.0, "quality": row["brisque"], "is_face": False,
+    }
+    expected = scorer.analyze_photo_score(
+        metrics, "人像", config.UNKNOWN_SCENE_WEIGHTS)["comp_score"]
+    assert row["scene"] == "人像"
+    assert row["scene_conf"] == 0.4
+    assert row["comp_score"] == pytest.approx(expected)
+    assert row["is_uncertain"] == 1
 
 
 def test_explicit_weights_override_neutral_fallback(full_data_dir, tmp_db_path, monkeypatch):

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
+    QComboBox,
     QLabel,
     QProgressBar,
     QScrollArea,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from engine import config
 from .face_strip import FaceStrip
 
 
@@ -114,6 +116,7 @@ class CollapsibleSection(QWidget):
 
 class InspectorWidget(QScrollArea):
     face_selected = Signal(tuple)
+    scene_requested = Signal(object)
 
     def __init__(self, store=None, parent=None) -> None:
         super().__init__(parent)
@@ -156,6 +159,16 @@ class InspectorWidget(QScrollArea):
                     bar.setEnabled(False)
                     section.content_layout.addWidget(bar)
                     self.score_bars[field] = bar
+            if title == "分析信息":
+                section.content_layout.addWidget(QLabel("人工场景修正（下次分析重算评分）"))
+                self.scene_combo = QComboBox()
+                self.scene_combo.addItem("自动识别", None)
+                for scene in config.SCENE_LABELS:
+                    self.scene_combo.addItem(scene, scene)
+                self.scene_combo.currentIndexChanged.connect(
+                    lambda _index: self.scene_requested.emit(self.scene_combo.currentData())
+                )
+                section.content_layout.addWidget(self.scene_combo)
         layout.addStretch(1)
         self.setWidget(container)
 
@@ -178,12 +191,22 @@ class InspectorWidget(QScrollArea):
         self.ai_badge.setText("AI 推荐" if item.get("is_best") else "AI 未推荐")
         self.focus_badge.setText("当前焦点" if focused else "非当前焦点")
         self.manual_badge.setText("人工保留" if item.get("label") == "P" else "未人工保留")
+        self.scene_combo.blockSignals(True)
+        self.scene_combo.setCurrentIndex(max(0, self.scene_combo.findData(item.get("scene_manual"))))
+        self.scene_combo.blockSignals(False)
         for field, label in self.value_labels.items():
             value = item.get(field)
+            if field == "scene":
+                value = item.get("scene_manual") or value
             if field == "blur_reliable":
                 label.setText("可自动判断" if value else "需人工确认")
             elif field == "blur_score" and item.get("blur_reliable") == 0:
                 label.setText(f"{self._display(value)}（仅供参考）")
+            elif field == "scene" and value and not item.get("scene_manual") and (
+                item.get("scene_conf") is None or
+                float(item["scene_conf"]) < config.SCENE_CONF_THRESHOLD
+            ):
+                label.setText(f"{value}（待确认）")
             else:
                 label.setText(self._display(value))
             if field in self.score_bars:

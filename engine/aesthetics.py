@@ -38,7 +38,6 @@ BAD = list(config.AESTHETIC_BAD_PROMPTS)
 # 场景候选（设计文档 4.4.6），取空格前单词作为场景名
 SCENES = list(config.SCENES)
 SCENE_NAMES = [s.split(" ")[0] for s in SCENES]
-SCENE_CONF_THRESHOLD = config.SCENE_CONF_THRESHOLD   # 低置信度(<0.6)归入"其他"兜底
 
 # 模型名与缓存（模型权重下载到项目内 .hf_cache，不落 C 盘）
 MODEL_NAME = config.CLIP_MODEL_NAME
@@ -207,8 +206,8 @@ def analyze_batch(images) -> list[dict]:
     参数：images 为 PIL.Image 列表（RGB）。
     返回：每张一个 dict：
         aesthetic  0-100 美学分（LAION 美学头；缺失时降级 CLIP 提示词）
-        scene      场景名（人像/风光/建筑/街拍/宠物/静物/其他）
-        scene_conf 场景置信度（0-1）
+        scene      四类候选场景（低置信度时仍保留候选）
+        scene_conf 七条提示词最高项的置信度（0-1）
     """
     n = len(images)
     if n == 0:
@@ -231,9 +230,7 @@ def analyze_batch(images) -> list[dict]:
     for i in range(n):
         idx = max(range(n_scene), key=lambda k: scores[i][k])
         conf = scores[i][idx]
-        scene = SCENE_NAMES[idx]
-        if conf < SCENE_CONF_THRESHOLD:   # 低置信度兜底
-            scene = "其他"
+        scene = config.scene_label(SCENE_NAMES[idx])
         results.append({"aesthetic": float(aesthetic[i]), "scene": scene, "scene_conf": float(conf)})
     return results
 

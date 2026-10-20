@@ -218,7 +218,14 @@ class PhotoStore:
 
     def backup_for_quality_rules(self) -> Path:
         """Back up the complete live SQLite database before changing quality metrics."""
-        base = Path(f"{self.db_path}.pre-quality.bak")
+        return self._backup_with_suffix("pre-quality")
+
+    def backup_for_scene_rules(self) -> Path:
+        """Back up the complete live database before changing scene labels."""
+        return self._backup_with_suffix("pre-scene")
+
+    def _backup_with_suffix(self, suffix: str) -> Path:
+        base = Path(f"{self.db_path}.{suffix}.bak")
         target = base
         suffix = 1
         while target.exists():
@@ -230,6 +237,28 @@ class PhotoStore:
         finally:
             backup.close()
         return target
+
+    def migrate_scene_rules(self) -> None:
+        """Map manual labels and invalidate only scene-dependent automatic results."""
+        with self.conn:
+            for old, new in config.SCENE_ALIASES.items():
+                if old != new:
+                    self.conn.execute(
+                        "UPDATE photos SET scene_manual=? WHERE scene_manual=?",
+                        (new, old),
+                    )
+            self.conn.execute(
+                "UPDATE photos SET scene=NULL, scene_conf=NULL, scene_model=NULL, "
+                "group_id=NULL, comp_score=NULL, is_waste=NULL, is_best=NULL, "
+                "is_uncertain=NULL, is_candidate=NULL, candidate_rank=NULL, "
+                "is_similar_loser=NULL, waste_reasons=NULL"
+            )
+            self.conn.execute("DELETE FROM groups")
+            self.conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('scene_rules', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (config.SCENE_RULE_VERSION,),
+            )
 
     def stash_decisions(self, key: str) -> int:
         """把库中全部人工决策快照写入 meta（换分析源前调用），返回条数。
@@ -266,7 +295,8 @@ class PhotoStore:
             (
                 row.get("path"), row.get("star"), row.get("label"),
                 row.get("decision_source"), row.get("decision_updated_at"),
-                row.get("scene_manual"),
+                (config.scene_label(row["scene_manual"])
+                 if row.get("scene_manual") else None),
             )
             for row in rows
             if isinstance(row, dict) and row.get("path")
@@ -481,7 +511,38 @@ class PhotoStore:
 
     def set_scene_manual(self, path: str, scene: str | None):
         """场景手动修正：写入 scene_manual（NULL 表示回到自动识别）。"""
+        if scene is not None:
+            scene = config.scene_label(scene)
+            if scene not in config.SCENE_LABELS:
+                raise ValueError(f"未知场景标签：{scene}")
         self.update_photo(path, scene_manual=scene)
+
+    def set_scene_manual_batch(self, paths: list[str], scene: str | None) -> list[tuple[str, str | None]]:
+        """同一素材的 RAW/JPEG 场景一起更新，返回可撤销的旧值。"""
+        if scene is not None:
+            scene = config.scene_label(scene)
+            if scene not in config.SCENE_LABELS:
+                raise ValueError(f"未知场景标签：{scene}")
+        if not paths:
+            return []
+        placeholders = ",".join("?" for _ in paths)
+        with self.conn:
+            before = self.conn.execute(
+                f"SELECT path, scene_manual FROM photos WHERE path IN ({placeholders})",
+                paths,
+            ).fetchall()
+            self.conn.executemany(
+                "UPDATE photos SET scene_manual=? WHERE path=?",
+                [(scene, row["path"]) for row in before],
+            )
+        return [(row["path"], row["scene_manual"]) for row in before]
+
+    def restore_scene_manual_batch(self, before: list[tuple[str, str | None]]) -> None:
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE photos SET scene_manual=? WHERE path=?",
+                [(scene, path) for path, scene in before],
+            )
 
     def scene_overrides(self) -> dict[str, str]:
         """返回 {path: scene} 的人工场景修正表（供分析时覆盖自动场景）。"""

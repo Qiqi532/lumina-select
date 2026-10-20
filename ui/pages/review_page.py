@@ -151,6 +151,7 @@ class ReviewPage(QWidget):
 
         self.inspector = InspectorWidget(store)
         self.inspector.face_selected.connect(self.canvas.focus_rect)
+        self.inspector.scene_requested.connect(self._set_scene_manual)
         self.splitter.addWidget(self.inspector)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.splitterMoved.connect(lambda _position, _index: self._save_timer.start())
@@ -237,6 +238,13 @@ class ReviewPage(QWidget):
         if current is not None and current.asset_id == asset_id:
             row, regions = self.review.inspector_data(asset_id)
             self.inspector.set_item(row, regions, focused=True, preview_image=image)
+
+    def _set_scene_manual(self, scene: str | None) -> None:
+        if self.review.current is None:
+            return
+        self.review.set_scene_manual(scene)
+        self.notice_requested.emit("人工场景已保存；下次分析将按新场景重算推荐，可按 Ctrl+Z 撤销")
+        self.refresh()
 
     def _filmstrip_selected(self, index, _previous) -> None:
         if self._updating or not index.isValid():

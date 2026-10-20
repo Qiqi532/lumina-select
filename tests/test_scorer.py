@@ -35,7 +35,7 @@ def test_composite_weights():
     """composite 按场景权重加权。人像含人脸维度权重，风光人脸权重为 0。"""
     base = dict(blur_n=0.5, expo_n=0.5, aes_n=0.5, face_n=1.0)
     comp_portrait = scorer.composite(**base, scene="人像")
-    comp_landscape = scorer.composite(**base, scene="风光")
+    comp_landscape = scorer.composite(**base, scene="风景")
     assert comp_portrait > comp_landscape  # 人像给 face 权重，风光不给
 
 

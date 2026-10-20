@@ -11,7 +11,7 @@ faces.py —— MediaPipe 人脸检测与闭眼判定（EAR）
 【Windows 中文路径适配（重要）】
     mediapipe 的 C++ 层读取模型文件（.binarypb/.tflite）使用窄字符 API，
     无法读取含中文的路径（与 OpenCV cv2.imread 同类问题）。本项目路径
-    （D:\\PHOTO\\Photo like\\PRD_智能选片工具\\...）含中文，因此：
+    （例如 D:\\PHOTO\\Lumia\\照片\\...）含中文，因此：
     1) 已对 .venv 内 mediapipe/__init__.py 注释掉 tasks 导入（避免连锁导入
        tensorflow，tensorflow 与本项目 venv 的 protobuf 3.20.3 冲突）；
     2) 本模块在加载 mediapipe 前，若发现其安装路径含非 ASCII 字符，会自动

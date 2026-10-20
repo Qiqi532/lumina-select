@@ -2,6 +2,92 @@
 
 本项目的版本演进记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [0.6.0] — 2026-10-11（单版本基线：破坏性收敛 + 数据保护 + 加固层）
+
+> 主题：**先保护数据 → 再删功能 → 再收敛工程 → 最后迁移与文案**。
+> 工作包 S1（阻断）/ S2（收敛）/ S3（加固）/ S4（迁移与文档），每个工作包一个独立可回退的提交。
+> 本地提交齐备且每步测试全绿；**尚未推送远端**（按约定 GitHub 动作需逐次授权）。
+
+### 破坏性变更（需注意）
+
+- **移除轻量版发行线**。`HeuristicBackend`（纯 OpenCV 启发式后端）、进程级开关
+  `config.INFERENCE_BACKEND`、轻量打包四件套（`build_dist_lightweight.bat`、
+  `installer_lightweight.iss`、`dist_runtime_hook_light.py`、`光影选片助手_dist_lightweight.spec`）
+  与轻量依赖锁（`requirements-lightweight.txt`、`requirements/lightweight.in`）全部删除。
+  原因：轻量后端没有图像嵌入能力，而 L3 排序层与 L4 个性化层都以嵌入为输入，保留它等于锁死路线图。
+- **后端从"进程状态"改为"调用参数"**：`analyze_directory(root, db, backend="torch")`，
+  默认值唯一来源为 `engine/inference.py::DEFAULT_BACKEND`。
+- **旧库可以平滑升级，但升级是明示的**：
+  - schema 升级（v0.5 及更早 → 当前）在打开项目时自动完成，**升级前先备份**到
+    `<库名>.pre-v05.bak`，路径会在「旧库升级说明」里显示；
+  - 库里记录的分析后端已下线（`heuristic`）或模型签名变化时，下次分析**只重算指标**
+    （`reset_metrics()`），**人工复核（star / label / scene_manual）零丢失**；
+  - 状态行新增「导出已复核清单」，可随时把人工决策导出为 CSV 兜底
+    （路径 / 星级 / 保留排除 / 人工场景 / 决策时间）。
+
+### 修复（数据安全）
+
+- **P0-1**：模型签名变化触发 `clear_all()` 导致人工复核被静默清库 → 改为
+  `store.reset_metrics()`：只置空模型派生度量列，`star` / `label` / `decision_source` /
+  `scene_manual` 一律保留，随之自动重算。换分析源仍走"先归档到 meta、再清库、再恢复"。
+- **P1-1**：`upsert_photos_batch` 以 `rows[0]` 的键决定列集合 → 首行解码失败会连带丢掉
+  同块其余照片的指标列。改为按固定 `PHOTO_FIELDS` 白名单取"所有行键的并集"。
+- **P1-2**：`.png` 未纳入 `EMBEDDED_XMP_EXTS`，PNG 交付会既不成功又不留文件；
+  copy 模式元数据写失败还会把已复制的交付副本删掉。现在 `.png` 全链路支持，
+  元数据失败只把该文件降级为 `failed`，**不删交付副本**。
+
+### 修复（引擎与导出）
+
+- **P1-3**：EAR 用归一化坐标计算，非方图（3:2 / 2:3）必然失真 → 改为像素口径
+  （关键点乘 `[w, h]`），同一眼型在不同画幅下给出同一 EAR。
+- **P1-4**：`_popcount` 走 `np.unpackbits` 产生 `(N,64)` 中间数组，n=50000 时峰值内存外推
+  781 MB → 改 SWAR 分块实现，实测峰值增量 **793.5 MB → 47.3 MB**，校验和一致。
+- **P1-6**：导出预览不暴露"批次内同名冲突"（含 `X.CR3` 与 `X.NEF` 共用同一 `X.xmp`）→
+  预览阶段即报冲突并去重。
+- **P1-7 / P2-16**：in-place XMP 写入的 `OSError` 会抛穿整批；临时文件可能残留 →
+  单文件失败降级为 `failed` 且可单独重试，临时文件尽力清理。
+- **P1-8**：复核语义自相矛盾（0 星却仍会导出）→ 统一为「0 星＝取消保留、给星＝撤回排除」，
+  `set_star` 与界面提示一致。
+- **P1-9 / P1-10**：「下一组」会跳过连续的无分组照片；分析进行中重复触发会把异常抛进
+  Qt 事件循环（用户什么都看不到）→ 分别加守卫。
+- **P1-11 / P1-12**：CUDA OOM 时只改 device 不搬模型（下次前向必炸）、闭眼分类器失败每张照片
+  刷一条 warning（数千行日志淹没真问题）→ GPU 回退真的把模型搬到 CPU 并重试一次；
+  失败每轮只报一次。
+- **0B（集成复核发现，S3-补）**：`_eye_failure_reported` 只在分类器**加载成功**时清零；
+  模型长期不可用（离线缺权重、HF 缓存残缺）时那句永远不执行 → 第二轮起既不写 warning
+  也不上报降级事件，静默降级重现。改为 `faces.reset_run_state()`，由流水线在**每轮分析
+  开始**（与 `degradations.drain()` 同一轮次边界）显式调用。
+
+### 新增
+
+- **降级可见性**（`engine/degradations.py`）：GPU→CPU 回退、闭眼分类器不可用、美学头缺失
+  等降级统一汇总进分析结果，UI 会说明"这次少算了什么"，而不是给一份看起来正常的结果。
+- **离线能力成为被测试守住的行为**（门禁 G3）：`models_guard.local_model_source()` 让
+  CLIP / 闭眼 ViT 直接以项目内快照目录为加载源，避免 `huggingface_hub` 在 import 时固化
+  缓存目录导致的"本地有模型却去别处找"，也消除权重静默漂移（P0-1 雷区）。
+- **旧库升级提示 + 已复核清单导出**（S4-1）：见上方"破坏性变更"。
+- 异常日志治理：`ui/` 与 `services/` 的 worker `except` 一律补 `_log.exception()`，
+  失败路径在 `smart_cull.log` 留下 traceback。
+
+### 文档与发行清单
+
+- README / WORKSPACE_README 改为单版本表述，新增「从 v0.5 升级：旧项目怎么办」一节，
+  并修正历史失实（v0.5 轻量版的闭眼判定只有 EAR 几何信号，没有 ViT 分类器）。
+- NOTICE.md 明确"自 v0.6 起只有一份许可清单"；`THIRD_PARTY_NOTICES.md` 由锁定依赖重新生成，
+  与 `release/license-policy.toml` 校验一致。
+
+### 测试与门禁
+
+- 全量测试：**242 passed**（`pytest tests -q -o addopts=`）/ **241 passed, 1 deselected**（默认标记）。
+- 新增测试文件：`test_degradations.py`、`test_aesthetics.py`、`test_models_guard.py`、
+  `test_upgrade_v06.py`（G4 端到端：旧后端产物重算后人工决策零丢失）。
+- 1000 项复核基准实测：加载 0.026 s（预算 3.0 s）、5 个筛选各 ≤ 0.3 ms（预算 0.3 s），
+  `scripts/benchmark_review.py --items 1000` 判定通过。
+- **G1 数据保护**通过；**G2 测试全绿**通过；**G3 离线自足**通过（现位于 `scripts/diagnostics/offline_probe.py`、
+  `scripts/diagnostics/cache_verify.py`）；**G4 迁移**通过；**G6 许可**通过（67 packages，pyiqa 缺席）。
+- **未完成门禁（不阻塞 v0.6，属后续版本）**：G5 影子评测（v0.7 底座/算法替换）、
+  G7 人工验收（Lightroom 实机 + Qt 许可批准）、G8 ONNX 输出差异（v0.7）。
+
 ## [0.4.0] — 2026-09-05（可靠性与模型分析大修，待评审确认后提交）
 
 > 全栈工程评审后的第一轮修复：聚焦**可靠性（崩溃/误判/资源泄漏）**与**模型分析（画质/美学模型选型）**。

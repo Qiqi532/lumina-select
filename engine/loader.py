@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
+from io import BytesIO
 
 import cv2
 import numpy as np
@@ -126,7 +127,18 @@ def read_exif(path: str) -> dict:
         height    高
         has_exif  是否读到真实 EXIF 时间
     """
-    info = {"ts": None, "width": 0, "height": 0, "has_exif": False}
+    info = {
+        "ts": None,
+        "width": 0,
+        "height": 0,
+        "has_exif": False,
+        "camera_model": None,
+        "lens_model": None,
+        "focal_length": None,
+        "shutter_speed": None,
+        "aperture": None,
+        "iso": None,
+    }
     try:
         with Image.open(path) as im:
             info["width"], info["height"] = im.size
@@ -140,14 +152,56 @@ def read_exif(path: str) -> dict:
                 if ts is not None:
                     info["ts"] = ts
                     info["has_exif"] = True
+                info["camera_model"] = _clean_exif_text(exif.get(272))
+                info["lens_model"] = _clean_exif_text(exif.get(42036))
+                info["focal_length"] = _exif_number(exif.get(37386))
+                info["shutter_speed"] = _format_shutter(exif.get(33434))
+                info["aperture"] = _exif_number(exif.get(33437))
+                iso = _exif_number(exif.get(34855))
+                info["iso"] = int(round(iso)) if iso is not None else None
     except Exception:
         pass
+    if os.path.splitext(path)[1].lower() in RAW_EXTS and _HAS_RAWPY:
+        try:
+            with rawpy.imread(path) as raw:
+                info["width"] = raw.sizes.width
+                info["height"] = raw.sizes.height
+        except Exception as error:
+            _log.warning("RAW 尺寸读取失败 %s: %s", path, error)
     if info["ts"] is None:
         try:
             info["ts"] = os.path.getmtime(path) * 1000.0
         except Exception:
             info["ts"] = 0.0
     return info
+
+
+def _clean_exif_text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _exif_number(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, tuple) and len(value) == 2:
+            return float(value[0]) / float(value[1])
+        return float(value)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _format_shutter(value) -> str | None:
+    seconds = _exif_number(value)
+    if seconds is None or seconds <= 0:
+        return None
+    if seconds < 1:
+        denominator = max(1, round(1.0 / seconds))
+        return f"1/{denominator}"
+    return f"{seconds:g}s"
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +228,40 @@ def load_image(path: str, max_size: int | None = None) -> Image.Image | None:
             im.thumbnail((max_size, max_size), Image.LANCZOS)
         return im
     except (UnidentifiedImageError, OSError, Exception):
+        return None
+
+
+def load_review_preview(
+    path: str,
+    *,
+    paired_jpeg: str | None = None,
+    max_size: int | None = None,
+) -> Image.Image | None:
+    """Load a low-latency review preview, preferring paired/embedded JPEG data."""
+    if paired_jpeg:
+        return load_image(paired_jpeg, max_size=max_size)
+    if os.path.splitext(path)[1].casefold() not in RAW_EXTS or not _HAS_RAWPY:
+        return load_image(path, max_size=max_size)
+    try:
+        import rawpy
+
+        with rawpy.imread(path) as raw:
+            try:
+                thumb = raw.extract_thumb()
+                format_name = getattr(thumb.format, "name", str(thumb.format)).casefold()
+                if "jpeg" in format_name or "jpg" in format_name:
+                    image = Image.open(BytesIO(thumb.data))
+                    image = ImageOps.exif_transpose(image).convert("RGB")
+                else:
+                    raise ValueError("embedded preview is not JPEG")
+            except Exception:
+                image = Image.fromarray(
+                    raw.postprocess(use_camera_wb=True, half_size=True)
+                ).convert("RGB")
+        if max_size is not None:
+            image.thumbnail((max_size, max_size), Image.LANCZOS)
+        return image
+    except Exception:
         return None
 
 

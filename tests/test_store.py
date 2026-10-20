@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from engine import store
+from engine.migrations import LATEST_SCHEMA_VERSION
 
 
 def _photo(path, **kw):
@@ -11,22 +12,11 @@ def _photo(path, **kw):
     return p
 
 
-def test_new_column_migration_idempotent(tmp_db_path):
-    """老库缺新列时 ALTER 补齐；重复执行不报错（幂等）。"""
-    s = store.PhotoStore(tmp_db_path, enable_wal=False)
-    # 模拟老库：手动删掉 scene_manual 列
-    s.conn.execute("ALTER TABLE photos DROP COLUMN scene_manual")
-    s.conn.commit()
-    s.close()
-    # 重建：应自动补齐新列
-    s2 = store.PhotoStore(tmp_db_path, enable_wal=False)
-    cols = [r["name"] for r in s2.conn.execute("PRAGMA table_info(photos)").fetchall()]
-    assert "scene_manual" in cols
-    # 再次打开（幂等）
-    s3 = store.PhotoStore(tmp_db_path, enable_wal=False)
-    cols3 = [r["name"] for r in s3.conn.execute("PRAGMA table_info(photos)").fetchall()]
-    assert "scene_manual" in cols3
-    s3.close()
+def test_schema_version_is_idempotent(tmp_db_path):
+    with store.PhotoStore(tmp_db_path, enable_wal=False) as first:
+        assert first.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
+    with store.PhotoStore(tmp_db_path, enable_wal=False) as second:
+        assert second.conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION
 
 
 def test_upsert_and_incremental_update(tmp_db_path):
@@ -85,6 +75,45 @@ def test_scene_manual_roundtrip(tmp_db_path):
     s.close()
 
 
+def test_scene_rule_migration_keeps_human_decisions_and_quality(tmp_db_path):
+    from engine import config
+
+    with store.PhotoStore(tmp_db_path) as s:
+        s.upsert_photo(_photo("/a/1.jpg", scene="风光", scene_conf=0.9,
+                              blur_score=125.0, aesthetic=72.0,
+                              scene_manual="建筑/城市", star=5, label="P",
+                              is_best=1))
+        backup = s.backup_for_scene_rules()
+        s.migrate_scene_rules()
+        row = s.get_photo("/a/1.jpg")
+        assert backup.is_file()
+        assert (row["scene_manual"], row["star"], row["label"]) == ("风景", 5, "P")
+        assert (row["blur_score"], row["aesthetic"]) == (125.0, 72.0)
+        assert row["scene"] is None
+        assert row["is_best"] is None
+        assert s.get_meta("scene_rules") == config.SCENE_RULE_VERSION
+
+
+def test_manual_scene_accepts_legacy_alias_and_rejects_unknown(tmp_db_path):
+    import pytest
+
+    with store.PhotoStore(tmp_db_path) as s:
+        s.upsert_photo(_photo("/a/1.jpg"))
+        s.set_scene_manual("/a/1.jpg", "街拍/纪实")
+        assert s.get_photo("/a/1.jpg")["scene_manual"] == "街拍"
+        with pytest.raises(ValueError, match="未知场景"):
+            s.set_scene_manual("/a/1.jpg", "婚礼")
+
+
+def test_legacy_stashed_scene_maps_when_source_is_restored(tmp_db_path):
+    with store.PhotoStore(tmp_db_path) as s:
+        s.upsert_photo(_photo("/a/1.jpg", scene_manual="街拍/纪实"))
+        s.stash_decisions("decisions:/a")
+        s.clear_all()
+        s.rehydrate_decisions("decisions:/a")
+        assert s.get_photo("/a/1.jpg")["scene_manual"] == "街拍"
+
+
 def test_context_manager(tmp_db_path):
     with store.PhotoStore(tmp_db_path) as s:
         s.upsert_photo(_photo("/a/1.jpg"))
@@ -93,3 +122,73 @@ def test_context_manager(tmp_db_path):
     conn = sqlite3.connect(tmp_db_path)
     assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 1
     conn.close()
+
+
+def test_repository_v05_roundtrips_and_asset_decision(tmp_db_path):
+    with store.PhotoStore(tmp_db_path, enable_wal=False) as photo_store:
+        photo_store.upsert_photos_batch(
+            [
+                _photo(
+                    "/a/IMG_0001.CR3",
+                    asset_pair_id="pair-1",
+                    asset_role="raw",
+                    star=1,
+                ),
+                _photo(
+                    "/a/IMG_0001.JPG",
+                    asset_pair_id="pair-1",
+                    asset_role="jpeg",
+                    star=1,
+                ),
+            ]
+        )
+
+        before = photo_store.apply_decision(
+            ["/a/IMG_0001.CR3"], star=5, label="P", source="manual"
+        )
+
+        assert {item["path"] for item in before} == {
+            "/a/IMG_0001.CR3",
+            "/a/IMG_0001.JPG",
+        }
+        for path in ("/a/IMG_0001.CR3", "/a/IMG_0001.JPG"):
+            row = photo_store.get_photo(path)
+            assert (row["star"], row["label"], row["decision_source"]) == (
+                5,
+                "P",
+                "manual",
+            )
+            assert row["decision_updated_at"] is not None
+
+        photo_store.replace_face_regions(
+            "/a/IMG_0001.CR3",
+            [
+                {
+                    "face_index": 0,
+                    "x": 0.1,
+                    "y": 0.2,
+                    "width": 0.3,
+                    "height": 0.4,
+                    "ear": 0.25,
+                    "eye_close_prob": None,
+                    "sharpness": 88.0,
+                }
+            ],
+        )
+        assert photo_store.face_regions("/a/IMG_0001.CR3")[0]["sharpness"] == 88.0
+
+        photo_store.set_preference("review.view_mode", "compare")
+        assert photo_store.get_preference("review.view_mode") == "compare"
+
+        photo_store.record_export_item(
+            "/a/IMG_0001.CR3",
+            "D:/delivery/IMG_0001.CR3",
+            "D:/delivery/IMG_0001.xmp",
+            "success",
+            None,
+        )
+        export_row = photo_store.conn.execute(
+            "SELECT * FROM export_items WHERE path=?",
+            ("/a/IMG_0001.CR3",),
+        ).fetchone()
+        assert export_row["status"] == "success"

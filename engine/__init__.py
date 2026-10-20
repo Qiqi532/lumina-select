@@ -11,7 +11,7 @@
     models_guard.py 模型缓存自愈 + 离线优先 + 多级回退链（CLIP/IQA/闭眼分类器）
     faces.py       MediaPipe 人脸检测与闭眼 EAR + ViT 分类器融合
     aesthetics.py  CLIP 美学评分（LAION 线性头，缺失时降级 CLIP 提示词，GPU 优先）
-    scene.py       CLIP 场景分类（人像/风光/其他，GPU 优先）
+    scene.py       CLIP 场景分类（人像/风景/街拍/其他，GPU 优先）
     similarity.py  pHash 相似、连拍分组、并查集聚类（流式 O(block×n) 内存有界）
     scorer.py      场景自适应评分、废片判定、最佳帧 + 不确定甄选
     store.py       SQLite 读写（WAL + 事务化 + 断点续跑辅助）

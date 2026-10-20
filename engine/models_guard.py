@@ -28,6 +28,10 @@ from __future__ import annotations
 import os
 import shutil
 import time
+import hashlib
+import json
+import sys
+from pathlib import Path
 
 from . import config
 from .log import get_logger
@@ -49,6 +53,9 @@ class ModelLoadError(RuntimeError):
         lines = [f"{self.what} 未能加载，已尝试："]
         for name, err in self.attempts:
             lines.append(f"  · {name} —— {err}")
+        if getattr(sys, "frozen", False):
+            lines.append("请重新获取完整的离线便携目录；随包模型缺失或校验失败，当前不会联网补齐。")
+            return "\n".join(lines)
         lines.append("")
         lines.append("可尝试：")
         lines.append("  1) 联网后重启程序，让模型自动下载到项目内 .hf_cache / .torch_cache；")
@@ -115,6 +122,8 @@ def repair_hf_cache(verbose: bool = False) -> dict:
     返回统计 dict。
     """
     stats = {"no_exist_removed": 0, "incomplete_snapshots": 0, "scanned": 0}
+    if getattr(sys, "frozen", False):
+        return stats
     hub = hf_hub_cache_dir()
     if not os.path.isdir(hub):
         return stats
@@ -234,8 +243,60 @@ def has_local_snapshot(repo_id: str) -> str | None:
     return None
 
 
+def local_model_source(repo_id: str) -> str | None:
+    """本地已有**完整**快照时返回其目录，否则 None —— 调用方应**直接用它去加载**。
+
+    为什么不只是"加 `local_files_only=True`、让 HF 自己解析缓存目录"：
+
+      1) **时序脆弱**：huggingface_hub 在 **import 时**就把 `HF_HUB_CACHE` 算成模块常量。
+         若它在 `apply_env()` 之前被 import（测试、第三方库或将来有人在模块顶层
+         `import transformers` 都会触发），之后再设置环境变量**不再生效** —— 表现是
+         "项目内 `.hf_cache` 里明明有模型，程序却去 `~/.cache/huggingface` 找并失败"。
+         本项目在 S2-2 的测试里实测复现过这一条。
+      2) **性能**：网络可达时 `from_pretrained` 仍会做 HEAD/etag 往返，抖动重试能把一次
+         CLIP 加载从 ~15s 拖到 **499s**（实测）。
+      3) **稳定性**：模型 ID 未锁修订，联网会让权重在用户无感知的情况下漂移，而
+         `_ai_model_signature()` 含模型名 → 漂移触发全库重算，正是 P0-1 的雷区。
+
+    显式给出目录可一次解决以上三条，并完全摆脱缓存环境变量的时序依赖。
+    """
+    if getattr(sys, "frozen", False):
+        return bundled_model_source(repo_id)
+    return has_local_snapshot(repo_id)
+
+
+_validated_bundles: set[str] = set()
+
+
+def bundled_model_source(repo_id: str) -> str:
+    """Frozen builds use only the locked, hashed files inside _internal."""
+    root = Path(config._BUNDLED_ROOT)
+    lock_path = root / "models.lock.json"
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        model = next(item for item in lock["models"] if item["repo"] == repo_id)
+        directory = root / "model_snapshots" / model["directory"]
+        if repo_id not in _validated_bundles:
+            for filename, record in model["files"].items():
+                path = directory / filename
+                if not path.is_file() or path.stat().st_size != record["size"]:
+                    raise ValueError(f"missing or wrong size: {filename}")
+                sha = hashlib.sha256()
+                with path.open("rb") as stream:
+                    for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                        sha.update(block)
+                if sha.hexdigest() != record["sha256"]:
+                    raise ValueError(f"SHA-256 mismatch: {filename}")
+            _validated_bundles.add(repo_id)
+        return str(directory)
+    except (OSError, ValueError, KeyError, StopIteration, TypeError) as error:
+        raise ModelLoadError(repo_id, [("随包权重", str(error))]) from error
+
+
 def offline_local_files_only() -> bool:
     """是否应强制本地加载（config.OFFLINE_FIRST 且确实处于离线/受限网络）。"""
+    if getattr(sys, "frozen", False):
+        return True
     if not config.OFFLINE_FIRST:
         return False
     # 探测【实际配置的端点】而非写死 huggingface.co：国内网络典型场景是

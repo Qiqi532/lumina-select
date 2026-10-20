@@ -1,0 +1,4 @@
+# 许可全文必须逐字节保真：禁止 Git 的换行转换（CRLF/LF 互转）改写内容哈希。
+# 这些文件的 SHA-256 会在文档/门禁中被引用，任何换行改写都会让校验对不上。
+release/LGPL-3.0.txt  -text
+release/GPL-3.0.txt   -text

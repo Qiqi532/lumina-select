@@ -111,18 +111,65 @@ def _hamming_matrix(hexes: list[str]) -> np.ndarray:
     return mat
 
 
+# --- SWAR（SIMD Within A Register）并行位计数常量（Hacker's Delight §5-1） ---
+_SWAR_M1 = np.uint64(0x5555555555555555)   # 0101…
+_SWAR_M2 = np.uint64(0x3333333333333333)   # 0011…
+_SWAR_M4 = np.uint64(0x0F0F0F0F0F0F0F0F)   # 0000_1111…
+_SWAR_H01 = np.uint64(0x0101010101010101)
+# 分块行数：把临时数组峰值压到 O(_SWAR_CHUNK_ROWS × n)，与照片总数无关
+_SWAR_CHUNK_ROWS = 32
+
+
 def _popcount(xor: np.ndarray) -> np.ndarray:
-    """计算 uint64 数组中每个元素的置位数（汉明距离）。优先用 numpy 2.0 的
-    bitwise_count（无临时大数组），否则退回 unpackbits。"""
+    """计算 uint64 数组中每个元素的置位数（即汉明距离）。
+
+    实现按优先级：
+      1. numpy >= 2.0 的 ``np.bitwise_count`` —— 原生位计数，无额外大数组；
+      2. SWAR 并行位计数（``_popcount_swar``，按行分块）—— 峰值额外内存
+         ≈ ``2 × _SWAR_CHUNK_ROWS × n × 8B``，与照片总数无关。
+
+    【v0.6 S3-2 / P1-4】旧实现退回 ``np.unpackbits``，会把 ``(rows, n)`` 的
+    uint64 展开成 ``(rows, n, 64)`` 的 uint8 —— **一次性放大 64 倍**：
+    ``iter_similar_pairs`` 取 block=256、n=50000 时单次约 800 MB，与本文件声称的
+    「内存占用与照片总数无关」自相矛盾。（本项目 numpy 1.26 **没有**
+    ``bitwise_count``，即那正是当时实际生效的路径，不是死代码。）
+    """
     fn = getattr(np, "bitwise_count", None)
     if fn is not None:
         try:
-            return fn(xor).astype(np.uint8)
+            return np.asarray(fn(xor), dtype=np.uint8)
         except Exception:
             pass
-    # uint64 = 8 字节 = 64 位；unpackbits 展开为 (rows, n*64)，再还原成 (rows, n, 64)
-    bits = np.unpackbits(xor.view(np.uint8), axis=1)
-    return bits.reshape(xor.shape[0], xor.shape[1], 64).sum(axis=2).astype(np.uint8)
+    return _popcount_swar(xor)
+
+
+def _popcount_swar(xor: np.ndarray) -> np.ndarray:
+    """SWAR 并行位计数，按行分块执行，避免任何与整个输入同尺寸的大临时数组。
+
+    在一个 uint64 内部完成「2 位 → 4 位 → 8 位一组」的加法（掩码移位），
+    因此额外内存只是**一块**（``_SWAR_CHUNK_ROWS × n``）量级。
+    """
+    xor = np.asarray(xor, dtype=np.uint64)
+    out = np.empty(xor.shape, dtype=np.uint8)
+    one, two, four, shift = np.uint64(1), np.uint64(2), np.uint64(4), np.uint64(56)
+    rows = xor.shape[0]
+    for i0 in range(0, rows, _SWAR_CHUNK_ROWS):
+        i1 = min(i0 + _SWAR_CHUNK_ROWS, rows)
+        x = xor[i0:i1].copy()
+        t = x >> one
+        t &= _SWAR_M1
+        x -= t                       # 每 2 位一组内的置位数（0..2）
+        t = x >> two
+        t &= _SWAR_M2
+        x &= _SWAR_M2
+        x += t                       # 每 4 位一组（0..4）
+        t = x >> four
+        x += t
+        x &= _SWAR_M4                # 每 8 位一组（0..8）
+        x *= _SWAR_H01               # 各字节计数累加到最高字节
+        x >>= shift
+        out[i0:i1] = x.astype(np.uint8)
+    return out
 
 
 def iter_similar_pairs(hexes: list[str], threshold: int, block: int = 256):
@@ -134,6 +181,8 @@ def iter_similar_pairs(hexes: list[str], threshold: int, block: int = 256):
         n=30_000  →  矩阵 900MB + 索引 ≈ 7.2GB  → 直接 MemoryError
     改为分块扫描：每次只算 block×n 的一小块，内存占用 O(block × n)，
     与照片总数无关。对典型相册（几百到几万张）都能稳定跑完。
+    （【v0.6 S3-2】位计数本身也按行分块，见 ``_popcount_swar`` —— 块内
+    不再出现 O(block × n × 64) 的 unpackbits 展开，这才让本段承诺成立。）
     """
     n = len(hexes)
     if n < 2:

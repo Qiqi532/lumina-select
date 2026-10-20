@@ -3,10 +3,10 @@
 scorer.py —— 场景自适应综合评分、废片判定、最佳帧推荐与不确定候选甄选
 
 算法（设计文档 4.4.8 / 4.4.9）：
-    1. 三套场景预设（人像/风光/其他），权重 = 清晰/曝光/美学/人脸：
+    1. 四类场景预设（人像/风景/街拍/其他），权重 = 清晰/曝光/美学/人脸：
          人像 (0.25, 0.20, 0.25, 0.30)，启用闭眼硬判
-         风光 (0.35, 0.30, 0.35, 0.00)，不启用闭眼
-         其他 (0.30, 0.20, 0.30, 0.20)，检测到人脸才启用 face 维度
+         风景 (0.35, 0.30, 0.35, 0.00)，不启用闭眼
+         街拍/其他 (0.30, 0.20, 0.30, 0.20)，检测到人脸才启用 face 维度
     2. 综合分 = 100 * Σ(权重 * 归一化子分)，各子分归一化到 [0,1]。
     3. 废片硬性规则：严重模糊(blur<60)、严重过曝/欠曝(over|under>0.5)、
        高度重复、人像闭眼(EAR<0.20)。
@@ -120,11 +120,12 @@ def analyze_photo_score(metrics: dict, scene: str = "其他", weights=None) -> d
     二者等权融合；模型缺失时退化为纯拉普拉斯。
     兼容旧字段：DB 列名仍为 brisque，也接受新名 quality（优先）。
     """
-    blur_n = norm_blur(metrics.get("blur_score", 0.0))
+    blur_reliable = bool(metrics.get("blur_reliable", True))
+    blur_n = norm_blur(metrics.get("blur_score", 0.0)) if blur_reliable else 0.5
     q = metrics.get("quality")
     if q is None:
         q = metrics.get("brisque")
-    if q is not None:
+    if q is not None and blur_reliable:
         blur_n = 0.5 * blur_n + 0.5 * norm_quality(q)
     expo_n = norm_expo(metrics.get("over", 0.0), metrics.get("under", 0.0))
     aes_n = norm_aes(metrics.get("aesthetic", 0.0))
@@ -144,7 +145,7 @@ def analyze_photo_score(metrics: dict, scene: str = "其他", weights=None) -> d
 # ---------------------------------------------------------------------------
 def waste_reasons(scene: str, blur_score: float, over: float, under: float,
                   eyes_closed: bool, dup: bool, brisque=None,
-                  is_face: bool = False) -> list[str]:
+                  is_face: bool = False, blur_reliable: bool = True) -> list[str]:
     """返回废片原因列表；空列表表示非废片。
 
     eyes_closed: 融合判定结果（EAR<阈值 或 闭眼分类器>阈值）。
@@ -163,7 +164,7 @@ def waste_reasons(scene: str, blur_score: float, over: float, under: float,
         改为：只要确实检测到人脸（is_face）就启用闭眼硬判。
     """
     reasons = []
-    if blur_score < BLUR_WASTE:
+    if blur_reliable and blur_score < BLUR_WASTE:
         reasons.append("模糊")
     if over > EXPO_WASTE or under > EXPO_WASTE:
         reasons.append("过曝/欠曝")
@@ -177,16 +178,19 @@ def waste_reasons(scene: str, blur_score: float, over: float, under: float,
 
 
 def is_waste(scene: str, blur_score: float, over: float, under: float,
-             eyes_closed: bool, dup: bool, brisque=None, is_face: bool = False) -> bool:
+             eyes_closed: bool, dup: bool, brisque=None, is_face: bool = False,
+             blur_reliable: bool = True) -> bool:
     return len(waste_reasons(scene, blur_score, over, under, eyes_closed, dup,
-                             brisque, is_face)) > 0
+                             brisque, is_face, blur_reliable)) > 0
 
 
 def is_hard_waste(scene: str, blur_score: float, over: float, under: float,
-                  eyes_closed: bool, brisque=None, is_face: bool = False) -> bool:
+                  eyes_closed: bool, brisque=None, is_face: bool = False,
+                  blur_reliable: bool = True) -> bool:
     """硬性质量废片（不含'高度重复'，因为去重判定依赖组内 verdict）。"""
     return len(waste_reasons(scene, blur_score, over, under, eyes_closed, dup=False,
-                             brisque=brisque, is_face=is_face)) > 0
+                             brisque=brisque, is_face=is_face,
+                             blur_reliable=blur_reliable)) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +270,7 @@ if __name__ == "__main__":
     import random
     random.seed(0)
     print("场景预设：", {k: v["w"] for k, v in PRESETS.items()})
-    for scene, conf in [("人像", 0.9), ("风光", 0.9), ("其他", 0.3)]:
+    for scene, conf in [("人像", 0.9), ("风景", 0.9), ("其他", 0.3)]:
         scores = []
         for i in range(4):
             m = {

@@ -7,7 +7,16 @@
 """
 from __future__ import annotations
 
-from engine.similarity import UnionFind, _hamming_hex, group_similar
+import numpy as np
+
+from engine.similarity import (
+    UnionFind,
+    _SWAR_CHUNK_ROWS,
+    _hamming_hex,
+    _popcount,
+    _popcount_swar,
+    group_similar,
+)
 
 H0 = "0" * 16
 H1 = "3000000000000000"   # 与 H0 汉明距离 2
@@ -95,3 +104,55 @@ def test_group_similar_no_ts_no_hash_single(monkeypatch):
     _, gids, groups = group_similar(paths, ts)
     assert gids[0] != gids[1]
     assert len(groups) == 2
+
+
+# ---------------------------------------------------------------------------
+# v0.6 S3-2 / P1-4：位计数不得退回 unpackbits（那会把内存一次性放大 64 倍）
+# ---------------------------------------------------------------------------
+
+def _random_u64(rng, shape):
+    raw = rng.integers(0, 256, size=shape + (8,), dtype=np.uint8)
+    return raw.view(np.uint64).reshape(shape)
+
+
+def _reference_popcount(x):
+    """参考实现（正确但内存放大 64×），仅用于小数组对照。
+
+    注意每个 uint64 = 8 字节 = 64 位，展开后必须 reshape 回 (…, 64) 再按最后
+    一维求和，否则会退化成「整行位总数」而不是「每元素置位数」。
+    """
+    x = np.asarray(x, dtype=np.uint64)
+    bits = np.unpackbits(x.view(np.uint8), axis=-1)
+    return bits.reshape(x.shape + (64,)).sum(axis=-1).astype(np.uint8)
+
+
+def test_popcount_matches_reference_on_random_data():
+    rng = np.random.default_rng(20261011)
+    x = _random_u64(rng, (7, 33))
+    expected = _reference_popcount(x)
+    assert np.array_equal(_popcount(x), expected)
+    assert np.array_equal(_popcount_swar(x), expected)
+
+
+def test_popcount_handles_edge_values():
+    x = np.array([0, 1, 0xFFFFFFFFFFFFFFFF, 0x8000000000000000], dtype=np.uint64)
+    assert _popcount(x).tolist() == [0, 1, 64, 1]
+    assert _popcount_swar(x).tolist() == [0, 1, 64, 1]
+
+
+def test_popcount_never_falls_back_to_unpackbits(monkeypatch):
+    """回归守卫：实现不得再退回 np.unpackbits。"""
+    def boom(*args, **kwargs):  # pragma: no cover - 触发即失败
+        raise AssertionError("_popcount 不应使用 np.unpackbits（内存放大 64×）")
+
+    monkeypatch.setattr(np, "unpackbits", boom)
+    x = np.array([[0, 3, 7, 255, 0xFFFF]], dtype=np.uint64)
+    assert _popcount(x).tolist() == [[0, 2, 3, 8, 16]]
+
+
+def test_popcount_swar_correct_across_multiple_chunks():
+    """行数跨过多个分块边界时仍需正确。"""
+    rows = _SWAR_CHUNK_ROWS * 2 + 3
+    rng = np.random.default_rng(7)
+    x = _random_u64(rng, (rows, 5))
+    assert np.array_equal(_popcount_swar(x), _reference_popcount(x))

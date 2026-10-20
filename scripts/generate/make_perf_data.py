@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from PIL import Image, ExifTags
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def save_jpeg_with_exif(path, img_bgr, timestamp):

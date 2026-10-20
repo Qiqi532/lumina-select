@@ -20,7 +20,7 @@ import sys
 # 一、路径与目录（项目内所有缓存/数据，均不落 C 盘）
 # ===========================================================================
 # 根目录的双形态解析：
-#   开发态    → photo-cull-demo/（engine/ 的上一级）
+#   开发态    → 仓库根目录（engine/ 的上一级）
 #   打包态    → exe 所在目录（onedir 下 dist\光影选片助手\）。
 # 必须区分：PyInstaller onedir 打包后 __file__ 指向只读的 _internal，
 # 且安装目录可能是 Program Files —— 数据库/日志/模型缓存等可写内容
@@ -36,7 +36,6 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")          # 数据目录（测试�
 DEFAULT_DB = os.path.join(DATA_DIR, "cull.db")         # 默认 SQLite 索引库
 # 只读模型权重：开发态在 models/，打包态在 _internal/models（随包分发）
 MODELS_DIR = os.path.join(_BUNDLED_ROOT, "models")
-THUMB_DIR_NAME = ".thumbs"                             # 缩略图缓存目录名（扫描时自动跳过点开头目录）
 LOG_FILE = os.path.join(PROJECT_ROOT, "smart_cull.log")  # 统一日志文件
 
 # ===========================================================================
@@ -60,32 +59,17 @@ THUMB_CACHE_DIR = os.path.join(DATA_DIR, ".thumbcache")
 BLUR_WASTE_THRESHOLD = 60.0    # 拉普拉斯方差 < 60 视为严重模糊（废片）
 EXPO_WASTE_RATIO = 0.5         # 过曝/欠曝像素占比 > 0.5 视为严重
 BLUR_ANALYZE_SIZE = 512        # 拉普拉斯方差统一分析尺寸（保证可比）
+QUALITY_RULE_VERSION = "blur-aspect-no-upsample-small-review-v1"
 BRISQUE_ANALYZE_SIZE = 512     # BRISQUE 输入尺寸
 BRISQUE_SATURATED = 80.0       # BRISQUE ≥80 高度怀疑非自然内容（插画/截图）→ 中性化保护
 BRISQUE_WASTE_THRESHOLD = 50.0 # BRISQUE > 50 视为严重失真（仅作评分参考，不作废片触发源）
 
-# --- 【模型升级 v0.4】无参考画质模型（可插拔 + 自动降级链）-------------------
-# 背景：BRISQUE（LIVE 数据集，2000 年代手工特征）在 KonIQ-10k 上 SRCC 仅 ~0.665，
-#       而 MUSIQ ~0.916、DBCNN ~0.88。本项目实测（data/demo，Cohen's d）：
-#         brisque 60ms d=-19.3（合成极端图上虚高，真实照片上泛化差）
-#         musiq   74ms d= 4.08 ｜ musiq-ava 44ms d=3.59
-#         clipiqa 93ms d= 6.46 ｜ dbcnn     39ms d=6.83
-#       结论：默认换 musiq（KonIQ 训练，真实照片失真感知），并按顺序自动降级。
-IQA_MODEL = "musiq"                       # 首选画质模型（pyiqa 名）
-IQA_FALLBACKS = ["dbcnn", "brisque"]      # 依次降级；全部失败则退化为纯拉普拉斯
-IQA_ANALYZE_SIZE = 512                    # 画质模型输入边长
-IQA_BATCH_SIZE = 8                        # 画质模型 GPU 批大小（0=逐张）
-# 各画质模型的原始量程，用于统一归一化为 0-100（越高越好）
-IQA_RANGES = {
-    "musiq": (0.0, 100.0),      # KonIQ MOS 1-5 → pyiqa 已放大到 0-100
-    "musiq-ava": (1.0, 10.0),   # AVA 1-10
-    "musiq-koniq": (0.0, 100.0),
-    "dbcnn": (0.0, 1.0),
-    "brisque": (0.0, 100.0),    # 失真分，越低越好 —— 需反向
-    "clipiqa": (0.0, 1.0),
-    "niqe": (0.0, 100.0),       # 失真分，越低越好
-}
-IQA_LOWER_IS_BETTER = {"brisque", "niqe", "ilniqe"}   # 这几个是失真分，需反向归一
+# --- 【v0.6 S2-1】推理后端选择已移除 --------------------------------------
+# 旧配置（INFERENCE_BACKEND / 环境变量 LUMINA_INFERENCE_BACKEND）在 v0.6 删除：
+#   本项目自 v0.6 起只发行标准版（Torch CLIP/ViT），轻量 heuristic 后端与
+#   双版本机制一并下线。后端现在是**调用参数**（analyze_directory(..., backend=...)），
+#   默认值唯一来源是 engine/inference.py::DEFAULT_BACKEND，不再放在 config 里 ——
+#   用全局配置切换后端会让"谁改了后端"不可追踪，历史上已因此丢过人工复核数据。
 
 # --- 【模型升级 v0.4】美学模型（真实照片优先）-------------------------------
 # 注意：musiq-ava 作为美学模型目前是【预留配置，尚未接入】—— aesthetics.py 当前
@@ -149,7 +133,20 @@ SCENES = [
     "静物/美食 still life",
     "其他 other",
 ]
-SCENE_CONF_THRESHOLD = 0.6     # 场景置信度 < 0.6 归入“其他”兜底
+SCENE_LABELS = ("人像", "风景", "街拍", "其他")
+SCENE_ALIASES = {
+    "人像": "人像", "风光": "风景", "风景": "风景",
+    "建筑/城市": "风景", "街拍/纪实": "街拍", "街拍": "街拍",
+    "宠物": "其他", "静物/美食": "其他", "其他": "其他",
+}
+SCENE_RULE_VERSION = "four-scene-map-v1"
+SCENE_CONF_THRESHOLD = 0.6     # 低置信度仅标记待确认，不改写候选类别
+SCENE_ADAPTIVE_CLASSES: tuple[str, ...] = ()  # 独立人工样本验收前保持中性权重
+
+
+def scene_label(value: str) -> str:
+    """将旧版七类名称映射到摄影师使用的四类标签。"""
+    return SCENE_ALIASES.get(value, value)
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"   # 美学 + 场景共用模型
 # LAION-Aesthetics 线性头（基于 openai/clip-vit-base-patch32 图像嵌入，约 3KB，随项目分发）
 AESTHETIC_HEAD_PATH = os.path.join(MODELS_DIR, "sa_0_4_vit_b_32_linear.pth")
@@ -157,12 +154,34 @@ AESTHETIC_HEAD_PATH = os.path.join(MODELS_DIR, "sa_0_4_vit_b_32_linear.pth")
 # ===========================================================================
 # 七、评分与甄选（scorer.py）
 # ===========================================================================
-# 三套场景预设：权重 (清晰, 曝光, 美学, 人脸) 与是否启用闭眼硬判
+# 四类场景预设：街拍先沿用均衡权重，不新增未经验证的评分参数。
 SCENE_PRESETS = {
     "人像": {"w": (0.25, 0.20, 0.25, 0.30), "check_eye": True, "label": "人像"},
-    "风光": {"w": (0.35, 0.30, 0.35, 0.00), "check_eye": False, "label": "风光"},
+    "风景": {"w": (0.35, 0.30, 0.35, 0.00), "check_eye": False, "label": "风景"},
+    "街拍": {"w": (0.30, 0.20, 0.30, 0.20), "check_eye": True, "label": "街拍"},
     "其他": {"w": (0.30, 0.20, 0.30, 0.20), "check_eye": True, "label": "其他"},
 }
+# --- 【修复 v0.7 / R-DEGRADE-1】场景**未知**时的中性权重 -----------------------------
+# 什么算"未知"：整组都没有真实场景来源 —— 既无本次 CLIP 结果，也无库中历史场景、
+# 无人工修正、无强制场景（典型情形：CLIP 后端降级不可用）。
+#
+# 为什么不能复用 "其他" 预设：`resolve_scene()` 在缺失信号时**兜底返回 "其他"**，
+# 于是"没有信息"被当成"分类结果是其他"来用权重。这会带来两个问题：
+#   1) 语义混淆：把"未知"伪装成"已分类为其他"，一次 CLIP 偶然可用 / 不可用，
+#      同一张照片会拿到不同权重，而数据里看不出哪种情况发生过；
+#   2) 实测可让**最佳帧推荐翻转**：例如人像连拍组在降级时被按 "其他" 评分，
+#      X(脸好/略糊) 与 Y(脸差/更清晰) 的胜者会随权重改变（人像权重选 X，其他权重选 Y）；
+#      风光连拍组同理（"其他" 与 "风光" 对 blur/expo 的相对权重不同，也会翻转）。
+#      回归用例见 tests/test_pipeline.py::test_degraded_run_scores_with_neutral_weights*。
+#
+# 取值 = **三套不同权重档位的算术平均**（街拍暂与其他共用均衡档位）：
+#   blur (0.25+0.35+0.30)/3 = 0.30000
+#   expo (0.20+0.30+0.20)/3 = 0.23333
+#   aes  (0.25+0.35+0.30)/3 = 0.30000
+#   face (0.30+0.00+0.20)/3 = 0.16667   ← 保留人脸维度
+# 刻意**保留** face 维度而非置 0：人脸与睁眼度是真实测得的信号（MediaPipe），
+# "不知道是什么场景"不等于"不知道有没有人脸"；置 0 会白白丢掉本就稀缺的可用信息。
+UNKNOWN_SCENE_WEIGHTS = (0.30, 0.70 / 3.0, 0.30, 0.50 / 3.0)
 BLUR_WASTE = BLUR_WASTE_THRESHOLD   # 严重模糊阈值（与质量检测同源）
 EXPO_WASTE = EXPO_WASTE_RATIO       # 严重过曝/欠曝占比
 EAR_WASTE = EAR_CLOSED_THRESHOLD    # 闭眼 EAR 阈值（与 faces 同源）
@@ -171,7 +190,6 @@ SCORE_GAP = 3.0                     # Top1-Top2 综合分差 < 3 → 无明确�
 SCENE_CONF_LOW = SCENE_CONF_THRESHOLD  # 场景置信度阈值（< 则待甄选）
 DIM_GAP = 0.05                      # 维度冲突判定：两候选维度差距 < 0.05 且互有胜负
 MAX_CANDIDATES = 5                  # 待甄选候选最多 5 张
-MIN_CANDIDATES = 2                  # 待甄选候选最少 2 张
 FACE_NEUTRAL = FACE_NEUTRAL_N       # 无脸时 face 维度中性值
 
 # --- 【修复 v0.4】重复判定策略 ---------------------------------------------
@@ -181,7 +199,6 @@ FACE_NEUTRAL = FACE_NEUTRAL_N       # 无脸时 face 维度中性值
 #   标成废片并排除出导出清单，摄影师会因此丢失可用素材。
 # 新策略：落选者只标记为「相似·落选」（不影响废片判定、默认收起但仍可找回），
 #   只有与最佳帧 pHash 汉明距离极近（真·近乎像素重复）才判为「高度重复」废片。
-DUP_MARK_LOSERS_AS_WASTE = False    # False：落选者不判废片
 DUP_HAMMING_STRICT = 4              # pHash 距离 ≤ 4 才视为"高度重复"（64 位中 ≤4 位不同）
 
 # ===========================================================================
@@ -191,20 +208,17 @@ ANALYZE_SIZE = LOAD_MAX_SIZE   # 分析用图尺寸（质量/人脸）
 CLIP_BATCH = 16                # CLIP 批量推理大小（GPU 友好）
 CLIP_LOAD_SIZE = 256           # CLIP 阶段重新解码用图边长（CLIP 内部缩到 224，256 足够）
 QUALITY_WORKERS = 4            # 质量检测线程池并行数（纯 cv2 计算，GIL 释放，可并行）
-STAGE1_WRITE_BATCH = 1         # 阶段一结果逐张写库（WAL 下开销极小，保证断电续跑精度）
 
 # ===========================================================================
 # 九、导出
 # ===========================================================================
 EXPORT_SUBDIR = "photos"       # 导出时复制文件的子目录名
 EXPORT_CSV_NAME = "smart_cull_export.csv"  # 导出 CSV 清单文件名
-EXPORT_SELECT_MIN_STAR = 4     # “保留清单”默认星级阈值（★≥4 或 P 视为选中）
 
 # ===========================================================================
 # 十、其他
 # ===========================================================================
 # 分析阶段名（进度回调与断点续跑状态共用）
-PHASES = ["扫描", "读取元数据", "质量与哈希", "美学与场景", "相似聚类", "评分与甄选"]
 
 # ===========================================================================
 # 十一、【修复 v0.4】模型加载健壮性
@@ -215,7 +229,6 @@ PHASES = ["扫描", "读取元数据", "质量与哈希", "美学与场景", "�
 #       → 离线加载 CLIP 直接 OSError 崩溃，GUI 只弹"分析出错"）
 #   * 代理/断网时下载失败会抛出原始异常，用户完全无法自救
 # 对策：缓存自愈 + 离线优先 + 失败可解释。
-AUTO_REPAIR_HF_CACHE = True    # 启动前清理过期的 .no_exist 标记
 OFFLINE_FIRST = True           # 本地缓存存在时优先离线加载，避免网络抖动阻塞启动
 MODEL_LOAD_TIMEOUT = 300       # 单个模型加载超时（秒），超时后走降级链
 # HuggingFace 镜像端点（国内网络可直接下载时留空；被墙时设为 https://hf-mirror.com）

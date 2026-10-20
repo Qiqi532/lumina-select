@@ -8,7 +8,7 @@
 ;   1) 先执行 build_dist.bat 生成 dist\光影选片助手\
 ;   2) 用 Inno Setup Compiler 打开本文件并编译（或命令行：
 ;      ISCC.exe installer.iss）
-;   3) 产出 Output\光影选片助手_setup.exe
+;   3) 产出 Output\LuminaSelect-v0.5-standard-dev-candidate.exe
 ;
 ; 说明：本脚本不打包模型权重；首次运行由各 exe 自动下载到安装目录
 ;       .hf_cache / .torch_cache（见 dist_runtime_hook.py）。
@@ -17,15 +17,20 @@
 
 #define MyAppName "光影选片助手"
 #define MyAppNameEn "Lumina Select"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "Lumina Select / 光影选片助手"
-#define MyAppURL "https://github.com/"
+#define MyAppURL "https://github.com/Qiqi532/lumina-select"
 ; 自包含 onedir 产物目录（相对本 .iss 文件）
-#define MySourceDir "dist\光影选片助手"
-#define MyOutputDir "Output"
+#ifndef MySourceDir
+  #define MySourceDir "dist\光影选片助手"
+#endif
+#ifndef MyOutputDir
+  #define MyOutputDir "Output"
+#endif
 
 [Setup]
 ; 基本信息
+AppId=LuminaSelect.Standard
 AppName={#MyAppName}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppVersion={#MyAppVersion}
@@ -37,18 +42,19 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 ; 单一安装包（非管理员也可装到用户目录；如需机器级安装去掉 PrivilegesRequired）
 PrivilegesRequired=lowest
-; 安装包标识（用于升级/卸载判定）
-SetupMutexAppId={#MyAppName}
+; AppId 决定升级/卸载记录归属。本项目自 v0.6 起只发行一个版本（标准版），
+; 轻量版安装器 installer_lightweight.iss 已删除，不再存在双 AppId 并存的情形。
 UninstallDisplayIcon={app}\光影选片助手.exe
 ; 输出
 OutputDir={#MyOutputDir}
-OutputBaseFilename={#MyAppName}_setup
+OutputBaseFilename=LuminaSelect-v0.5-standard-dev-candidate
 Compression=lzma2
 SolidCompression=yes
-; 64 位 Windows 优先
-ArchitecturesInstallIn64BitMode=x64
+; 本应用由 64 位 Python 构建，仅允许支持 x64 应用的 Windows
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 ; 允许在已安装目录写入模型缓存（程序运行时需要写 .hf_cache/.torch_cache）
-DirsExistsWarning=no
+DirExistsWarning=no
 DisableDirPage=auto
 
 [Languages]
@@ -59,6 +65,15 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; 递归拷贝整个 onedir 文件夹（含 exe + 全部依赖）
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 许可与声明文件：从 _internal 提升到 {app} 根目录，确保用户安装后在程序目录
+; 直接可见（LGPLv3 §4 要求随二进制附许可证全文，不能只藏在 _internal 里）。
+Source: "{#MySourceDir}\_internal\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\_internal\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+; LGPLv3 全文 + 其引用的 GPLv3 全文（T-02 合规物料）
+Source: "{#MySourceDir}\_internal\LGPL-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\_internal\GPL-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
+; LGPLv3 §4(d)(0) 要求提供替换 Qt 库的可行方式：随包附替换说明。
+Source: "{#MySourceDir}\_internal\RELINKING.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; 桌面快捷方式

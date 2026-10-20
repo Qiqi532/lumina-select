@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 from engine import scorer
+
+
+def test_unreliable_blur_is_neutral_and_cannot_mark_waste():
+    metrics = {"blur_score": 0.0, "blur_reliable": False,
+               "quality": 0.0, "over": 0.0, "under": 0.0, "aesthetic": 50.0}
+    score = scorer.analyze_photo_score(metrics)
+    assert score["blur_n"] == 0.5
+    assert "模糊" not in scorer.waste_reasons(
+        "其他", 0.0, 0.0, 0.0, False, False, blur_reliable=False)
+    assert "模糊" in scorer.waste_reasons(
+        "其他", 0.0, 0.0, 0.0, False, False, blur_reliable=True)
 from engine.config import SCENE_PRESETS
 
 
@@ -24,7 +35,7 @@ def test_composite_weights():
     """composite 按场景权重加权。人像含人脸维度权重，风光人脸权重为 0。"""
     base = dict(blur_n=0.5, expo_n=0.5, aes_n=0.5, face_n=1.0)
     comp_portrait = scorer.composite(**base, scene="人像")
-    comp_landscape = scorer.composite(**base, scene="风光")
+    comp_landscape = scorer.composite(**base, scene="风景")
     assert comp_portrait > comp_landscape  # 人像给 face 权重，风光不给
 
 

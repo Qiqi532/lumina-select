@@ -1,5 +1,5 @@
 # ===========================================================================
-# 光影选片助手 .gitignore —— MVP 仓库规则
+# Lumina Select 本地开发与构建产物
 # ===========================================================================
 
 # ---- Python ----
@@ -7,24 +7,26 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
-dist/
-pycache/          # start.bat 里 PYTHONPYCACHEPREFIX 的字节码缓存目录
+pycache/
 
 # ---- 虚拟环境 / 缓存（不落仓库）----
 .venv/
+.venv-cpu/
 .pip_cache/
 .hf_cache/
+model_snapshots/
 .torch_cache/
 .pytest_cache/
+_pytest_*/
 .mypy_cache/
 .coverage
 htmlcov/
 
-# ---- 数据（测试图 / 索引库 / 上传目录）----
+# ---- 本地资料与数据（不提交）----
+_archive/
 data/
 # 例外：models 目录只提交小权重（LAION 美学头约 3KB），
-#       大权重（CLIP / 闭眼 ViT / MediaPipe）首次运行自动下载到 .hf_cache
+#       大权重（CLIP / 闭眼 ViT / MediaPipe）保存在本地缓存或锁定快照，不提交到仓库
 !models/
 models/*
 !models/sa_0_4_vit_b_32_linear.pth
@@ -34,21 +36,29 @@ models/*
 *.db
 *.db-wal
 *.db-shm
-_srv.log
-_srv_err.log
 
 # ---- IDE / 系统 ----
 .idea/
 .vscode/
+.superpowers/
+# 工作区临时目录（构建日志 / 一次性调试脚本），不进仓库
+.workbuddy/
 *.swp
 .DS_Store
 Thumbs.db
 
-# ---- exe 打包产物（用 build_exe.bat 重新生成）----
+# ---- 打包产物（用 build_dist.bat 重新生成）----
 build/
+build-cpu/
+build-tools/
 dist/
+dist-cpu/
+Output/
+release/exiftool/
+release/exiftool-stage-*/
+release/exiftool-13.59_64.zip
+benchmark-*.json
 *.spec
 光影选片助手.exe
-
-# 例外：自包含打包规格是构建必需文件，随仓库分发
+# 自包含打包规格是构建必需文件，随仓库分发
 !光影选片助手_dist.spec

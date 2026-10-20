@@ -1,217 +1,223 @@
-/* 光影选片助手 —— 浅色专业主题
- * 冷静蓝绿强调色 + 中性灰底，统一圆角卡片、悬停态与对比度。
- * 与 app_qt.py 中的 FALLBACK_QSS 保持同源配色。
- */
+/* Lumina Select v0.5; values rendered from ui/theme.py tokens. */
 QWidget {
-    background-color: #F4F6F9;
-    color: #1F2933;
+    background-color: #111315;
+    color: #DFE2E6;
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
     font-size: 13px;
 }
-QMainWindow, QDialog {
-    background-color: #F4F6F9;
+QMainWindow, QDialog { background-color: #111315; }
+QLabel { background: transparent; }
+QFrame#WorkflowHeader, QFrame#Panel {
+    background-color: #181B1E;
+    border: 1px solid #303338;
+    border-radius: 8px;
 }
-QLabel {
+QLabel#PageTitle { font-size: 22px; font-weight: 700; }
+QLabel#PageSub, QLabel#Muted { color: #9299A1; }
+QLabel#StageState { color: #D7AA5A; font-weight: 600; }
+QPushButton {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 7px;
+    padding: 8px 16px;
+    min-height: 24px;
+}
+QPushButton:hover { border-color: #DFE2E6; }
+QPushButton:focus { border: 2px solid #D7AA5A; }
+QPushButton:disabled { color: #9299A1; }
+QPushButton#Primary {
+    background-color: #D7AA5A;
+    border-color: #D7AA5A;
+    color: #111315;
+    font-weight: 700;
+}
+QPushButton#Primary:hover { background-color: #DFB970; }
+QPushButton#StageButton[state="current"] {
+    border-color: #D7AA5A;
+    color: #D7AA5A;
+    font-weight: 700;
+}
+QPushButton#StageButton[state="done"] { color: #73C69A; }
+QPushButton#Danger { color: #D46A6A; }
+QProgressBar {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    min-height: 20px;
+    text-align: center;
+}
+QProgressBar::chunk { background-color: #D7AA5A; }
+QLineEdit {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 8px;
+}
+QLineEdit:focus { border: 2px solid #D7AA5A; }
+QStatusBar { background-color: #181B1E; color: #9299A1; }
+QFrame#ProjectCard {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 10px;
+}
+QFrame#ProjectCard:hover { border-color: #D7AA5A; }
+QLabel#CardTitle { font-size: 15px; font-weight: 700; }
+QLabel#CardMeta { color: #9299A1; }
+QLabel#CardWarn { color: #DFB970; }
+QPushButton#CardForget {
     background: transparent;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 1px 8px;
+    color: #9299A1;
 }
-QLabel#PageTitle {
-    font-size: 20px;
-    font-weight: 700;
-    color: #1F2933;
+QPushButton#CardForget:hover { border-color: #D46A6A; color: #D46A6A; }
+QScrollArea { background: transparent; }
+/* ---- 【T-08】分面筛选条 ---- */
+QWidget#FilterSidebar {
+    background-color: #181B1E;
+    border: 1px solid #303338;
+    border-radius: 8px;
 }
-QLabel#PageSub {
-    color: #6B7280;
-}
-QLabel#SectionTitle {
-    font-size: 15px;
-    font-weight: 600;
-    color: #3C7DBF;
-}
-QLabel#Metric {
-    font-size: 24px;
-    font-weight: 700;
-    color: #3C7DBF;
-}
-QLabel#MetricLabel {
-    color: #6B7280;
+QLabel#SidebarTitle { font-size: 15px; font-weight: 700; }
+QLabel#SectionTitle { color: #9299A1; font-size: 12px; font-weight: 600; }
+QLabel#ScopeLabel { color: #D7AA5A; font-size: 12px; }
+QFrame#Divider { color: #303338; max-height: 1px; }
+QPushButton#LinkButton {
+    background: transparent;
+    border: none;
+    padding: 2px 6px;
+    min-height: 0;
+    color: #9299A1;
     font-size: 12px;
 }
-QLabel#PopTitle {
-    font-size: 13px;
-    font-weight: 700;
-    color: #1F2933;
-}
-
-QPushButton {
-    background: #FFFFFF;
-    border: 1px solid #CBD5E1;
-    border-radius: 8px;
-    padding: 8px 16px;
-    font-weight: 500;
-    color: #1F2933;
-}
-QPushButton:hover {
-    border-color: #3C7DBF;
-    color: #3C7DBF;
-}
-QPushButton:pressed {
-    background: #EEF2F7;
-}
-QPushButton:disabled {
-    color: #6B7280;
-    border-color: #E2E8F0;
-}
-QPushButton#Primary {
-    background: #3C7DBF;
-    border: 1px solid #3C7DBF;
-    color: white;
-}
-QPushButton#Primary:hover {
-    background: #2C609A;
-    color: white;
-}
-QPushButton#Danger {
-    color: #D64550;
-    border-color: #D64550;
-}
-QPushButton#Danger:hover {
-    background: rgba(214,69,80,0.12);
-}
-QPushButton#Ghost {
+QPushButton#LinkButton:hover { color: #D7AA5A; }
+QPushButton#FacetHeader {
     background: transparent;
-    border: 1px solid #CBD5E1;
-    color: #6B7280;
-}
-
-QProgressBar {
-    border: 1px solid #E2E8F0;
-    border-radius: 8px;
-    background: #EEF2F7;
-    height: 18px;
-    text-align: center;
-    color: #1F2933;
-}
-QProgressBar::chunk {
-    background: #3C7DBF;
-    border-radius: 7px;
-}
-
-QListWidget#Nav {
-    background: #EEF2F7;
     border: none;
-    border-right: 1px solid #E2E8F0;
-    border-radius: 0;
-}
-QListWidget#Nav::item {
-    padding: 12px 18px;
-    border-radius: 8px;
-    color: #1F2933;
-}
-QListWidget#Nav::item:selected {
-    background: rgba(60,125,191,0.10);
-    color: #3C7DBF;
-    font-weight: 700;
-}
-QListWidget#Nav::item:hover {
-    background: #E2E8F0;
-}
-QListWidget {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 8px;
-}
-QListWidget::item {
-    padding: 10px;
-    border-radius: 6px;
-}
-QListWidget::item:selected {
-    background: #3C7DBF;
-    color: white;
-}
-
-QTableWidget {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 8px;
-    gridline-color: #E2E8F0;
-    color: #1F2933;
-}
-QHeaderView::section {
-    background: #EEF2F7;
-    color: #1F2933;
-    border: none;
-    border-bottom: 1px solid #E2E8F0;
-    padding: 6px;
-    font-weight: 600;
-}
-
-QScrollArea {
-    border: none;
-    background: transparent;
-}
-QScrollBar:vertical {
-    background: #F4F6F9;
-    width: 10px;
-}
-QScrollBar::handle:vertical {
-    background: #CBD5E1;
-    border-radius: 5px;
-    min-height: 30px;
-}
-QScrollBar::add-line, QScrollBar::sub-line {
-    height: 0;
-}
-
-QComboBox, QLineEdit, QSpinBox {
-    background: #FFFFFF;
-    border: 1px solid #CBD5E1;
-    border-radius: 6px;
-    padding: 5px 8px;
-    color: #1F2933;
-}
-QComboBox::drop-down {
-    border: none;
-}
-QComboBox QAbstractItemView {
-    background: #FFFFFF;
-    color: #1F2933;
-    selection-background-color: #3C7DBF;
-}
-QCheckBox {
-    background: transparent;
-    color: #1F2933;
-    spacing: 4px;
-}
-QRadioButton {
-    background: transparent;
-    color: #1F2933;
-    spacing: 4px;
-}
-
-QFrame#Card {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-}
-QFrame#Popover {
-    background: #FFFFFF;
-    border: 1px solid #CBD5E1;
-    border-radius: 10px;
-}
-QPushButton#CollapsibleHead {
-    background: #EEF2F7;
-    border: 1px solid #E2E8F0;
-    border-radius: 8px;
+    padding: 2px 0;
+    min-height: 0;
     text-align: left;
-    padding: 8px 12px;
+    color: #DFE2E6;
     font-weight: 600;
-    color: #1F2933;
 }
-QPushButton#CollapsibleHead:checked {
-    border-color: #3C7DBF;
-    color: #3C7DBF;
+QPushButton#FacetHeader:hover { color: #D7AA5A; }
+QPushButton#FacetChip {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 3px 8px;
+    min-height: 20px;
+    font-size: 12px;
+    text-align: left;
 }
+QPushButton#FacetChip:hover { border-color: #DFE2E6; }
+QPushButton#FacetChip:checked {
+    background-color: #D7AA5A;
+    border-color: #D7AA5A;
+    color: #111315;
+    font-weight: 700;
+}
+QPushButton#FacetChip:disabled { color: #303338; }
+/* ---- 【T-07】统一任务面板 ---- */
+QWidget#TaskPanel {
+    background-color: #181B1E;
+    border: 1px solid #303338;
+    border-radius: 8px;
+}
+QFrame#TaskRow {
+    background-color: #1C1F22;
+    border-radius: 6px;
+}
+QLabel#TaskRunning { color: #D7AA5A; font-weight: 700; }
+QLabel#TaskOk { color: #73C69A; font-weight: 700; }
+QLabel#TaskFail { color: #D46A6A; font-weight: 700; }
+QLabel#TaskMuted { color: #9299A1; }
+QPushButton#TaskCancel {
+    background: transparent;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 2px 8px;
+    min-height: 0;
+    color: #9299A1;
+    font-size: 12px;
+}
+QPushButton#TaskCancel:hover { border-color: #D46A6A; color: #D46A6A; }
+QPushButton#TaskCancel:disabled { color: #303338; border-color: #303338; }
 
-QStatusBar {
-    background: #EEF2F7;
-    color: #6B7280;
+/* ---- 【T-10】批量操作条 ---- */
+QWidget#BatchBar {
+    background-color: #16191C;
+    border: 1px solid #303338;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+QLabel#BatchCount { color: #E6E8EA; font-weight: 700; font-size: 12px; }
+QLabel#BatchMuted { color: #9299A1; font-size: 12px; }
+QPushButton#BatchLink {
+    background: transparent;
+    border: none;
+    color: #D7AA5A;
+    padding: 2px 6px;
+    min-height: 0;
+    font-size: 12px;
+}
+QPushButton#BatchLink:disabled { color: #303338; }
+QPushButton#BatchFlag, QPushButton#BatchStarApply {
+    background-color: #1C1F22;
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 2px 10px;
+    min-height: 0;
+    font-size: 12px;
+}
+QPushButton#BatchFlag:hover, QPushButton#BatchStarApply:hover {
+    border-color: #D7AA5A;
+    color: #D7AA5A;
+}
+QPushButton#BatchFlag:disabled, QPushButton#BatchStarApply:disabled {
+    color: #303338;
+    border-color: #303338;
+}
+QComboBox#BatchStar {
+    border: 1px solid #303338;
+    border-radius: 6px;
+    padding: 2px 6px;
+    min-height: 0;
+    font-size: 12px;
+    background-color: #1C1F22;
+}
+QComboBox#BatchStar:disabled { color: #303338; }
+QPushButton#DangerButton {
+    background-color: #1C1F22;
+    border: 1px solid #D46A6A;
+    border-radius: 6px;
+    padding: 2px 10px;
+    min-height: 0;
+    font-size: 12px;
+    color: #D46A6A;
+}
+QPushButton#DangerButton:hover { background-color: #D46A6A; color: #0F1113; }
+QPushButton#DangerButton:disabled { color: #303338; border-color: #303338; }
+
+/* ---- 【T-09】智能集合面板 ---- */
+QWidget#CollectionPanel {
+    background-color: #16191C;
+    border: 1px solid #303338;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+QListWidget#CollectionList {
+    background-color: transparent;
+    border: none;
+    font-size: 12px;
+}
+QListWidget#CollectionList::item {
+    padding: 3px 6px;
+    border-radius: 6px;
+}
+QListWidget#CollectionList::item:hover { background-color: #1C1F22; }
+QListWidget#CollectionList::item:selected {
+    background-color: #D7AA5A;
+    color: #0F1113;
 }

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 dist_runtime_hook.py —— 自包含分发包的 PyInstaller 运行时钩子（runtime hook）
 
 该文件由 光影选片助手_dist.spec 的 runtime_hooks 加载，在应用程序主模块
@@ -8,13 +8,16 @@ dist_runtime_hook.py —— 自包含分发包的 PyInstaller 运行时钩子（
 dist\光影选片助手\ 文件夹可"拎包即走"，模型权重不落 C 盘、也不依赖项目根目录。
 
 注意：本文件是纯 Python，不引入任何 PowerShell 或外部脚本依赖。
+
+注意：本文件为 raw 字符串（r""），因为 Windows 路径含反斜杠，
+      普通字符串里的 \光 / \ 会被解析成非法转义（Python 3.12 起告警，未来版本报错）。
 """
 import os
 import sys
 
 
 def _app_dir() -> str:
-    """返回 exe 所在目录（onedir 形态下即 dist\光影选片助手\）。"""
+    r"""返回 exe 所在目录（onedir 形态下即 dist\光影选片助手 文件夹）。"""
     if getattr(sys, "frozen", False):
         # 打包后：sys.executable 指向 <exe_dir>/光影选片助手.exe
         return os.path.dirname(os.path.abspath(sys.executable))
@@ -24,6 +27,22 @@ def _app_dir() -> str:
 
 _app = _app_dir()
 
+# 自定义钩子先于 PyInstaller 的 PySide6 钩子执行。QtCore 若先加载，Windows
+# 上 MediaPipe 的 _framework_bindings 会报 DLL 初始化失败；先装载该扩展。
+if getattr(sys, "frozen", False) and sys.platform == "win32":
+    import ctypes
+    from pathlib import Path
+
+    _mp_native_dir = Path(sys._MEIPASS) / "mediapipe" / "python"
+    _mp_extensions = list(_mp_native_dir.glob("_framework_bindings*.pyd"))
+    if len(_mp_extensions) == 1:
+        _mp_dll_directory = os.add_dll_directory(str(_mp_native_dir))
+        try:
+            _mp_native = ctypes.WinDLL(str(_mp_extensions[0]))
+        except OSError:
+            _mp_dll_directory.close()
+            # faces.py 后续记录具体错误并使用中性人脸值。
+
 # 仅在用户/系统未显式设置时才写入，允许用户用系统环境变量覆盖。
 os.environ.setdefault("HF_HOME", os.path.join(_app, ".hf_cache"))
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(_app, ".hf_cache", "hub"))
@@ -31,6 +50,32 @@ os.environ.setdefault("TORCH_HOME", os.path.join(_app, ".torch_cache"))
 os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(_app, ".hf_cache", "hub"))
 os.environ.setdefault("PYTHONPYCACHEPREFIX", os.path.join(_app, "pycache"))
 
-# 若已配置镜像（hf-mirror.com），保持透传；未配置则默认走国内镜像，便于首次下载。
-if not os.environ.get("HF_ENDPOINT"):
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# Frozen candidates never download model weights. Missing assets are visible errors.
+if getattr(sys, "frozen", False):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+
+# ---- 崩溃日志：本钩子在 PyInstaller 运行时最早加载，可捕获 import 阶段崩溃 ----
+def _install_crash_logger():
+    """把未捕获异常写入 exe 旁的 crash.log（打包态无控制台，否则崩溃无迹可寻）。"""
+    import sys as _sys
+    import time as _time
+    import traceback as _tb
+
+    def _hook(etype, val, tb):
+        try:
+            with open(os.path.join(_app, "crash.log"), "a", encoding="utf-8") as f:
+                f.write("\n===== %s =====\n" % _time.strftime("%Y-%m-%d %H:%M:%S"))
+                _tb.print_exception(etype, val, tb, file=f)
+        finally:
+            _sys.__excepthook__(etype, val, tb)
+
+    _sys.excepthook = _hook
+
+
+_install_crash_logger()
+
+# The standard frozen build must initialize Torch's native DLLs before the
+# UI imports MediaPipe. This imports no CLIP/ViT weights or runs inference.
+import torch  # noqa: F401

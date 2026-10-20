@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-scene.py —— CLIP 场景分类（人像/风光/其他，GPU 优先）
+scene.py —— CLIP 场景分类（人像/风景/街拍/其他，GPU 优先）
 
 算法（设计文档 4.4.6）：
     用 CLIP zero-shot 分类候选场景文本，取 softmax 最高者；输出场景名与置信度。
-    低置信度(<0.6)时归入"其他"，使用通用兜底规则，把误判影响限制在可控范围。
+    低置信度仍保留候选类别，由评分和界面标记为待确认。
 
 说明：场景分类复用 aesthetics 中已加载的同一 CLIP 模型（一次前向同时得到
 美学分与场景，见 aesthetics.analyze_batch）。本模块提供独立的场景分类接口，
@@ -17,8 +17,8 @@ from __future__ import annotations
 import os
 import sys
 
-from . import loader
-from .aesthetics import SCENE_NAMES, analyze_batch, get_clip
+from . import config, loader
+from .aesthetics import analyze_batch, get_clip
 
 
 def classify_batch(images) -> list[tuple[str, float]]:
@@ -30,12 +30,12 @@ def scene_classify(path: str) -> tuple[str, float]:
     """按路径分类场景，返回 (scene, conf)。"""
     img = loader.load_image(path, max_size=512)
     if img is None:
-        return "其他", 0.0
+        return "", 0.0
     return classify_batch([img])[0]
 
 
 def available_scenes() -> list[str]:
-    return list(SCENE_NAMES)
+    return list(config.SCENE_LABELS)
 
 
 # ---------------------------------------------------------------------------

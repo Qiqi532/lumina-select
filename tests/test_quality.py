@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import cv2
 
 from engine import quality
 
@@ -22,6 +23,23 @@ def test_noisy_image_high_blur():
     rng = np.random.default_rng(0)
     v = quality.blur_score_from_gray(rng.integers(0, 256, (256, 256)).astype(np.uint8))
     assert v > quality.BLUR_WASTE_THRESHOLD
+
+
+def test_small_image_is_not_upsampled_and_has_unreliable_blur():
+    gray = np.zeros((200, 300), dtype=np.uint8)
+    gray[:, 150:] = 255
+    expected = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    assert quality.blur_score_from_gray(gray) == expected
+    rgb = np.stack([gray] * 3, axis=-1)
+    assert quality.analyze_image_array(rgb)["blur_reliable"] is False
+
+
+def test_large_image_keeps_aspect_ratio_when_downsampled():
+    gray = np.zeros((800, 1200), dtype=np.uint8)
+    gray[:, 600:] = 255
+    resized = cv2.resize(gray, (512, 341), interpolation=cv2.INTER_AREA)
+    expected = float(cv2.Laplacian(resized, cv2.CV_64F).var())
+    assert quality.blur_score_from_gray(gray) == expected
 
 
 def test_white_overexposed():

@@ -83,8 +83,8 @@
   `test_upgrade_v06.py`（G4 端到端：旧后端产物重算后人工决策零丢失）。
 - 1000 项复核基准实测：加载 0.026 s（预算 3.0 s）、5 个筛选各 ≤ 0.3 ms（预算 0.3 s），
   `scripts/benchmark_review.py --items 1000` 判定通过。
-- **G1 数据保护**通过；**G2 测试全绿**通过；**G3 离线自足**通过（`data/_offline_probe.py`、
-  `data/_cache_verify.py`）；**G4 迁移**通过；**G6 许可**通过（67 packages，pyiqa 缺席）。
+- **G1 数据保护**通过；**G2 测试全绿**通过；**G3 离线自足**通过（现位于 `scripts/diagnostics/offline_probe.py`、
+  `scripts/diagnostics/cache_verify.py`）；**G4 迁移**通过；**G6 许可**通过（67 packages，pyiqa 缺席）。
 - **未完成门禁（不阻塞 v0.6，属后续版本）**：G5 影子评测（v0.7 底座/算法替换）、
   G7 人工验收（Lightroom 实机 + Qt 许可批准）、G8 ONNX 输出差异（v0.7）。
 

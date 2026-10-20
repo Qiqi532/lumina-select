@@ -39,7 +39,7 @@ def make_real_burst(src, out_dir, prefix, t0: datetime, variants=(0.0, 0.05, -0.
 
 
 def main():
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     demo = os.path.join(here, "data", "demo")
     if os.path.isdir(demo):
         shutil.rmtree(demo)

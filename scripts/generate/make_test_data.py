@@ -7,7 +7,7 @@ make_test_data.py —— 测试数据构造脚本（设计文档 附录 C）
 时间戳（连拍组内 350ms 间隔、不同组分钟级间隔），保证连拍分组逻辑可被真实触发。
 
 用法：
-    python make_test_data.py [输出目录] [每组张数]
+    python scripts/generate/make_test_data.py [输出目录] [每组张数]
 
 注意：
     - 用 PIL 写入 EXIF（cv2.imencode 不支持 EXIF）；

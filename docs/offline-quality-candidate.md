@@ -26,16 +26,16 @@
 ```powershell
 .\.venv\Scripts\python.exe scripts\evaluate_blur_sizes.py --glob 'data/_datasets/raise/raw/*.NEF' --limit 6 --output data\_blur_sizes_candidate.json
 .\.venv\Scripts\python.exe scripts\evaluate_scenes.py --manifest data\_datasets\raise\_manifest\raise_selected.csv --raise-root data\_datasets\raise\raw --output data\_scene_raise_candidate.json
-.\.venv\Scripts\python.exe scripts\evaluate_scenes.py --manifest 'D:\PHOTO\Photo like\场景标注\场景标签.csv' --output data\_scene_holdout_result.json
+.\.venv\Scripts\python.exe scripts\evaluate_scenes.py --manifest data\annotations\场景标签.csv --output data\_scene_holdout_result.json
 ```
 
-人工标注 CSV 可由 `scripts/prepare_scene_labels.py` 重建；可接受 UTF-8 或 Excel 在中文 Windows 上保存的 GBK 编码，“风景”会映射为“风光”。重新标注时应保留未参与提示词选择的独立样本，尤其补足至少 8 张“其他”。
+人工标注 CSV 可由 `scripts/prepare_scene_labels.py` 重建；可接受 UTF-8 或 Excel 在中文 Windows 上保存的 GBK 编码。旧标签“风光”会映射为“风景”。重新标注时应保留未参与提示词选择的独立样本，尤其补足至少 8 张“其他”。
 
 ## 离线包与复核门禁
 
 `release/models.lock.json` 固定 CLIP 与闭眼 ViT 的仓库修订、来源、大小和逐文件 SHA-256。`scripts/stage_models.py` 只从完整快照复制清单文件；冻结版只从 `_internal/model_snapshots` 加载。两套权重和照片都不进入 Git。包内权重缺失或校验失败时，不读取用户缓存、不静默联网，界面显示降级，场景未知时不给高置信最佳帧。
 
-发行前检查包括完整 pytest、ExifTool 与第三方许可检查、PyInstaller 构建、独立目录且空模型缓存的禁网冒烟，以及便携 ZIP 的 SHA-256。Lightroom 实机和许可人工复核继续按 `docs/v0.5-manual-acceptance.md` 进行。本次交付保留开发候选状态。
+发行前检查包括完整 pytest、ExifTool 与第三方许可检查、PyInstaller 构建、独立目录且空模型缓存的禁网冒烟，以及便携 ZIP 的 SHA-256。Lightroom 实机和许可人工复核继续按 `docs/acceptance/release-manual.md` 进行。本次交付保留开发候选状态。
 
 2026-10-19 的本机验收：完整 pytest 为 **521 passed、2 条第三方弃用警告**；发行依赖许可检查通过 67 个包，发行契约测试 12 项通过。最终 PyInstaller onedir 重建成功，约 1.86 GiB。原目录与复制到 `data/_candidate_detached_20261019` 的目录均在空用户模型缓存、离线模式下完成启动、CLIP 和闭眼 ViT 包内加载、分析及导出，未出现降级。复制品临时移走 CLIP `config.json` 后，程序明确报告 `missing or wrong size: config.json`，冒烟返回非零；随后恢复该文件。
 

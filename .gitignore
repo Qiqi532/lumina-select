@@ -1,5 +1,5 @@
 # ===========================================================================
-# 光影选片助手 .gitignore —— MVP 仓库规则
+# Lumina Select 本地开发与构建产物
 # ===========================================================================
 
 # ---- Python ----
@@ -7,31 +7,26 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
-dist/
-# PYTHONPYCACHEPREFIX 指向的字节码缓存目录
-# 注意：gitignore 不支持行内注释，注释必须单独成行，否则整行会被当成一个永不命中的 pattern
 pycache/
 
 # ---- 虚拟环境 / 缓存（不落仓库）----
 .venv/
 .venv-cpu/
-# 轻量环境已随 v0.6 S2 下线（项目只发行 Torch 标准版）。条目保留只是为了让
-# 本地遗留的 .venv-light/ 目录不污染 git status；确认删除后可一并移除本行。
-.venv-light/
 .pip_cache/
 .hf_cache/
 model_snapshots/
 .torch_cache/
 .pytest_cache/
+_pytest_*/
 .mypy_cache/
 .coverage
 htmlcov/
 
-# ---- 数据（测试图 / 索引库 / 上传目录）----
+# ---- 本地资料与数据（不提交）----
+_archive/
 data/
 # 例外：models 目录只提交小权重（LAION 美学头约 3KB），
-#       大权重（CLIP / 闭眼 ViT / MediaPipe）首次运行自动下载到 .hf_cache
+#       大权重（CLIP / 闭眼 ViT / MediaPipe）保存在本地缓存或锁定快照，不提交到仓库
 !models/
 models/*
 !models/sa_0_4_vit_b_32_linear.pth
@@ -41,8 +36,6 @@ models/*
 *.db
 *.db-wal
 *.db-shm
-_srv.log
-_srv_err.log
 
 # ---- IDE / 系统 ----
 .idea/
@@ -54,10 +47,7 @@ _srv_err.log
 .DS_Store
 Thumbs.db
 
-# ---- exe 打包产物（用 build_dist.bat 重新生成）----
-# 【v0.6 S2-1/2/3】轻量版已下线，build_light/ · dist_light/ · Output_light/ 三条
-# 规则与 !光影选片助手_dist_lightweight.spec 例外一并删除：留着它们等于给一个
-# 已不存在的发行版本留后门。
+# ---- 打包产物（用 build_dist.bat 重新生成）----
 build/
 build-cpu/
 build-tools/
@@ -70,8 +60,5 @@ release/exiftool-13.59_64.zip
 benchmark-*.json
 *.spec
 光影选片助手.exe
-# 打包态崩溃日志（_install_crash_logger 写到 exe 旁）
-crash.log
-
-# 例外：自包含打包规格是构建必需文件，随仓库分发（v0.6 起唯一发行规格）
+# 自包含打包规格是构建必需文件，随仓库分发
 !光影选片助手_dist.spec

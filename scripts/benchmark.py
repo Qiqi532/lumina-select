@@ -3,7 +3,7 @@
 scripts/benchmark.py —— 性能分段基准（MVP 验收 B）
 
 在指定目录上跑一次完整分析（首轮，含模型加载+缩略图+推理），再跑一次增量分析
-（仅聚类，验证增量索引），输出各阶段耗时表。也可配合 make_perf_data.py 生成的
+（仅聚类，验证增量索引），输出各阶段耗时表。也可配合 scripts/generate/make_perf_data.py 生成的
 1000 张 data/perf 使用。
 
 用法：
